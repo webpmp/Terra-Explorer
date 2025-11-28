@@ -25,10 +25,12 @@ const generateContentWithRetry = async (params: any, retries = 3): Promise<any> 
       error?.message?.includes('Quota') ||
       error?.message?.includes('RESOURCE_EXHAUSTED') ||
       error?.statusText?.includes('RESOURCE_EXHAUSTED') ||
-      (error?.error && error.error.code === 429);
+      (error?.error && error.error.code === 429) ||
+      (error?.error && error.error.status === 'RESOURCE_EXHAUSTED');
 
     if (isQuotaError && retries > 0) {
-      const delayMs = 2000 * (4 - retries); // 2000ms, 4000ms, 6000ms
+      // Increase backoff time: 4s, 8s, 12s to give quota time to reset
+      const delayMs = 4000 * (4 - retries); 
       console.warn(`Quota exceeded (429). Retrying in ${delayMs}ms...`);
       await new Promise(resolve => setTimeout(resolve, delayMs));
       return generateContentWithRetry(params, retries - 1);
@@ -275,7 +277,25 @@ const fetchLiveNews = async (query: string, exclude: string[] = []): Promise<New
       url: n.url || ""
     }));
 
-  } catch (error) {
+  } catch (error: any) {
+    // Gracefully handle quota errors for news specifically, as it's secondary content
+    const isQuota = 
+        error?.message?.includes('429') || 
+        error?.message?.includes('Quota') || 
+        error?.toString().includes('429') ||
+        error?.toString().includes('RESOURCE_EXHAUSTED') ||
+        (error?.error && error.error.code === 429) ||
+        (error?.error && error.error.status === 'RESOURCE_EXHAUSTED');
+    
+    if (isQuota) {
+        console.warn("Live news fetch skipped due to quota limits.");
+        return [{
+            headline: "News unavailable due to high traffic.",
+            source: "System",
+            url: "#"
+        }];
+    }
+      
     console.error("Error fetching live news:", error);
     return [];
   }
@@ -415,12 +435,14 @@ export const getInfoFromCoordinates = async (lat: number, lng: number): Promise<
         error?.message?.includes('429') || 
         error?.message?.includes('Quota') || 
         error?.toString().includes('429') ||
-        error?.toString().includes('RESOURCE_EXHAUSTED');
+        error?.toString().includes('RESOURCE_EXHAUSTED') ||
+        (error?.error && error.error.code === 429) ||
+        (error?.error && error.error.status === 'RESOURCE_EXHAUSTED');
 
     // Return a safe fallback object to prevent UI crashes
     return {
-        name: isQuota ? "High Traffic System" : "Connection Error",
-        type: "Error",
+        name: isQuota ? "System Busy (Quota)" : "Connection Error",
+        type: "Point of Interest" as LocationType,
         description: isQuota 
             ? "The knowledge engine is currently experiencing high request volume (Quota Exceeded). Please wait a few moments and try scanning another location." 
             : "Could not retrieve information at this time.",
@@ -472,7 +494,13 @@ export const getNearbyPlaces = async (lat: number, lng: number): Promise<MapMark
 
     return [];
 
-  } catch (error) {
+  } catch (error: any) {
+    // Quota errors are expected for secondary calls, suppress robustly
+    const isQuota = error?.message?.includes('429') || error?.message?.includes('Quota') || (error?.error && error.error.code === 429);
+    if (isQuota) {
+        console.warn("Skipping nearby places fetch due to quota.");
+        return [];
+    }
     console.error("Error fetching nearby places:", error);
     return [];
   }

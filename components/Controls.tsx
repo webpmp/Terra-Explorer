@@ -205,8 +205,8 @@ const Controls: React.FC<ControlsProps> = ({
 
   const theme = themes[skin];
   
-  // Format placeholder for retro skins
-  const displayPlaceholder = skin === 'modern' ? placeholder : placeholder.toUpperCase();
+  // Format placeholder for retro skins, clear on focus
+  const displayPlaceholder = isFocused ? "" : (skin === 'modern' ? placeholder : placeholder.toUpperCase());
 
   return (
     <div className="absolute bottom-6 left-0 right-0 z-20 flex flex-col items-center gap-4 pointer-events-none px-4">

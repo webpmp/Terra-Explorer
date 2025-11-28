@@ -1,10 +1,10 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { LocationInfo, SkinType, NotableItem } from '../types';
 import { 
   X, Users, Thermometer, Info, Newspaper, Crown, Map, Pin, ExternalLink, Loader2,
   BookOpen, Rocket, Trophy, Music, FlaskConical, Palette, Clapperboard, Image as ImageIcon,
-  Copy, Check
+  Copy, Check, ChevronDown, ChevronUp, Plus, Trash2, Edit2, Save, StickyNote
 } from 'lucide-react';
 
 interface InfoPanelProps {
@@ -15,6 +15,12 @@ interface InfoPanelProps {
   isFavorite: boolean;
   onToggleFavorite: () => void;
   onLoadMoreNews: () => Promise<void>;
+}
+
+interface Note {
+  id: string;
+  text: string;
+  timestamp: number;
 }
 
 // Helper to validate data availability
@@ -86,6 +92,9 @@ const NotablePersonCard: React.FC<{
   const [imageUrl, setImageUrl] = useState<string | null>(null);
 
   useEffect(() => {
+    // Safety check if item or name is missing
+    if (!item || !item.name) return;
+
     let active = true;
     const fetchImage = async () => {
       try {
@@ -104,7 +113,10 @@ const NotablePersonCard: React.FC<{
     };
     fetchImage();
     return () => { active = false; };
-  }, [item.name]);
+  }, [item?.name]);
+
+  // Guard against null item rendering
+  if (!item || !item.name) return null;
 
   return (
     <div className={`p-3 ${theme.card} flex items-start gap-3 group/item relative`}>
@@ -145,6 +157,90 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, skin, i
   const [wikiImage, setWikiImage] = useState<string | null>(null);
   const [expandedImage, setExpandedImage] = useState(false);
 
+  // Notes State
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [isNotesExpanded, setIsNotesExpanded] = useState(false);
+  const [newNote, setNewNote] = useState("");
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [editNoteText, setEditNoteText] = useState("");
+  
+  // Ref to track if we've initialized the expanded state for the current location
+  const locationInitializedRef = useRef<string | null>(null);
+
+  // Load Notes
+  useEffect(() => {
+    if (!info) {
+        setNotes([]);
+        return;
+    }
+
+    const locationKey = `notes_${info.name}_${info.coordinates.lat.toFixed(4)}_${info.coordinates.lng.toFixed(4)}`;
+    
+    // Check if we already initialized this location to prevent overriding user toggle
+    // If it's a new location, we set default expanded state
+    const isNewLocation = locationInitializedRef.current !== locationKey;
+    
+    if (isNewLocation) {
+        locationInitializedRef.current = locationKey;
+        const savedNotes = localStorage.getItem(locationKey);
+        if (savedNotes) {
+            try {
+                const parsed = JSON.parse(savedNotes);
+                setNotes(parsed);
+                // If notes exist, expand by default for new location
+                if (parsed.length > 0) setIsNotesExpanded(true);
+                else setIsNotesExpanded(false);
+            } catch (e) {
+                setNotes([]);
+                setIsNotesExpanded(false);
+            }
+        } else {
+            setNotes([]);
+            setIsNotesExpanded(false);
+        }
+    }
+  }, [info]);
+
+  // Save Notes Helper
+  const saveNotesToStorage = (updatedNotes: Note[]) => {
+    if (!info) return;
+    const locationKey = `notes_${info.name}_${info.coordinates.lat.toFixed(4)}_${info.coordinates.lng.toFixed(4)}`;
+    localStorage.setItem(locationKey, JSON.stringify(updatedNotes));
+    setNotes(updatedNotes);
+  };
+
+  const handleAddNote = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newNote.trim()) return;
+    
+    const note: Note = {
+        id: Date.now().toString(),
+        text: newNote.trim(),
+        timestamp: Date.now()
+    };
+    
+    const updated = [...notes, note];
+    saveNotesToStorage(updated);
+    setNewNote("");
+  };
+
+  const handleDeleteNote = (id: string) => {
+    const updated = notes.filter(n => n.id !== id);
+    saveNotesToStorage(updated);
+  };
+
+  const startEditing = (note: Note) => {
+    setEditingNoteId(note.id);
+    setEditNoteText(note.text);
+  };
+
+  const saveEdit = (id: string) => {
+    const updated = notes.map(n => n.id === id ? { ...n, text: editNoteText } : n);
+    saveNotesToStorage(updated);
+    setEditingNoteId(null);
+    setEditNoteText("");
+  };
+
   // Fetch image if population is missing
   useEffect(() => {
     const hasPopulation = isValidData(info?.population);
@@ -152,20 +248,14 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, skin, i
     if (info?.name && !hasPopulation) {
       const fetchImage = async () => {
         try {
-          // Added &redirects=1 to handle name variations (e.g. "Endurance" -> "Endurance (1912 ship)")
           const res = await fetch(`https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(info.name)}&prop=pageimages&format=json&pithumbsize=400&origin=*&redirects=1`);
           const data = await res.json();
           const pages = data.query?.pages;
           if (pages) {
             const pageId = Object.keys(pages)[0];
-            // Check if pageId is valid (not -1 for missing)
             if (pageId !== "-1") {
                 const url = pages[pageId]?.thumbnail?.source;
-                if (url) {
-                    setWikiImage(url);
-                } else {
-                    setWikiImage(null);
-                }
+                setWikiImage(url || null);
             } else {
                 setWikiImage(null);
             }
@@ -177,14 +267,9 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, skin, i
       };
       fetchImage();
     } else if (info?.name && hasPopulation) {
-        // If population becomes available (e.g. after loading), clear image
         setWikiImage(null);
     }
   }, [info?.name, info?.population]);
-
-  // We render if we have info OR if we are loading (showing skeleton)
-  // If isLoading is true but info is present, we show partial state
-  if (!info && !isLoading) return null;
 
   const handleLoadMore = async () => {
     setIsNewsLoading(true);
@@ -192,7 +277,7 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, skin, i
     setIsNewsLoading(false);
   };
 
-  // Theme configuration - Updated for Higher Contrast (using 300/400 instead of 500/600)
+  // Theme configuration
   const themes = {
     'modern': {
       container: "bg-black/80 backdrop-blur-xl border border-cyan-400/30 rounded-xl shadow-[0_0_50px_rgba(0,0,0,0.8)] text-white font-sans",
@@ -208,7 +293,9 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, skin, i
       listDot: "bg-cyan-400 rounded-full",
       closeBtn: "hover:bg-white/20 text-white rounded-full",
       actionBtn: "hover:bg-white/20 text-white rounded-full",
-      loadMoreBtn: "bg-white/5 border border-white/20 hover:bg-white/10 text-cyan-300 rounded-lg text-xs tracking-widest uppercase font-bold"
+      loadMoreBtn: "bg-white/5 border border-white/20 hover:bg-white/10 text-cyan-300 rounded-lg text-xs tracking-widest uppercase font-bold",
+      notesInput: "bg-black/40 border border-white/20 text-white placeholder-gray-400 focus:border-cyan-400 rounded-lg",
+      noteCard: "bg-black/40 border border-white/10 rounded-lg"
     },
     'retro-green': {
       container: "bg-black border-2 border-green-400 shadow-[0_0_20px_rgba(74,222,128,0.2)] text-green-300 font-retro tracking-widest",
@@ -224,7 +311,9 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, skin, i
       listDot: "bg-green-400 rounded-none",
       closeBtn: "hover:bg-green-400 hover:text-black text-green-300 border border-green-400 rounded-none",
       actionBtn: "hover:bg-green-400 hover:text-black text-green-300 border border-green-400 rounded-none",
-      loadMoreBtn: "bg-green-900/30 border border-green-400 hover:bg-green-400 hover:text-black text-green-300 rounded-none text-sm tracking-widest uppercase font-bold font-retro"
+      loadMoreBtn: "bg-green-900/30 border border-green-400 hover:bg-green-400 hover:text-black text-green-300 rounded-none text-sm tracking-widest uppercase font-bold font-retro",
+      notesInput: "bg-black border border-green-400 text-green-300 placeholder-green-400/50 focus:bg-green-900/20 rounded-none font-retro",
+      noteCard: "bg-black border border-green-400 rounded-none"
     },
     'retro-amber': {
       container: "bg-black border-2 border-amber-400 shadow-[0_0_20px_rgba(251,191,36,0.2)] text-amber-300 font-retro tracking-widest",
@@ -240,25 +329,21 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, skin, i
       listDot: "bg-amber-400 rounded-none",
       closeBtn: "hover:bg-amber-400 hover:text-black text-amber-300 border border-amber-400 rounded-none",
       actionBtn: "hover:bg-amber-400 hover:text-black text-amber-300 border border-amber-400 rounded-none",
-      loadMoreBtn: "bg-amber-900/30 border border-amber-400 hover:bg-amber-400 hover:text-black text-amber-300 rounded-none text-sm tracking-widest uppercase font-bold font-retro"
+      loadMoreBtn: "bg-amber-900/30 border border-amber-400 hover:bg-amber-400 hover:text-black text-amber-300 rounded-none text-sm tracking-widest uppercase font-bold font-retro",
+      notesInput: "bg-black border border-amber-400 text-amber-300 placeholder-amber-400/50 focus:bg-amber-900/20 rounded-none font-retro",
+      noteCard: "bg-black border border-amber-400 rounded-none"
     }
   };
 
   const theme = themes[skin];
   const isRetro = skin !== 'modern';
 
-  // Dynamic Font Sizes for Retro Mode
   const titleSize = isRetro ? 'text-3xl' : 'text-2xl';
   const subtextSize = isRetro ? 'text-sm' : 'text-xs';
   const bodySize = isRetro ? 'text-lg' : 'text-sm';
-  const smallTextSize = isRetro ? 'text-sm' : 'text-[10px]';
+  const smallTextSize = isRetro ? 'text-sm' : 'text-xs';
   const tabTextSize = isRetro ? 'text-sm' : 'text-xs';
 
-  const hasPopulation = isValidData(info?.population);
-  const hasClimate = isValidData(info?.climate);
-  const hasFunFacts = info?.funFacts && info.funFacts.length > 0;
-
-  // Full Screen Image Modal
   if (expandedImage && wikiImage) {
       return (
           <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4" onClick={() => setExpandedImage(false)}>
@@ -267,95 +352,74 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, skin, i
                   <button className={`absolute top-4 right-4 p-2 bg-black/50 text-white rounded-full hover:bg-white/20`}>
                       <X size={24} />
                   </button>
-                  <div className="absolute bottom-4 left-0 right-0 text-center text-white/80 font-mono text-sm uppercase tracking-widest pointer-events-none">
-                      Tap anywhere to close
-                  </div>
               </div>
           </div>
       )
   }
 
-  // Render Full Skeleton if no info at all
+  // Render Full Skeleton
   if (!info && isLoading) {
       return (
         <div className="absolute top-20 right-8 z-20 w-80 md:w-96 max-h-[calc(100vh-140px)] flex flex-col animate-in slide-in-from-right-12 fade-in duration-500">
             <div className={`p-6 ${theme.container} ${isRetro ? 'animate-pulse' : ''}`}>
-            {isRetro && <div className="text-center mb-4 uppercase text-2xl font-bold">Scanning...</div>}
-            <div className={`h-8 w-3/4 ${isRetro ? 'bg-current opacity-40' : 'bg-white/20 rounded'} mb-4`}></div>
-            <div className={`h-4 w-full ${isRetro ? 'bg-current opacity-30' : 'bg-white/10 rounded'} mb-2`}></div>
-            <div className={`h-4 w-full ${isRetro ? 'bg-current opacity-30' : 'bg-white/10 rounded'} mb-2`}></div>
-            <div className={`h-4 w-2/3 ${isRetro ? 'bg-current opacity-30' : 'bg-white/10 rounded'} mb-2`}></div>
-            {!isRetro && <p className="text-cyan-300 mt-4 text-sm font-mono text-center animate-pulse">Accessing Global Database...</p>}
+              {/* Skeleton content */}
+              <div className={`h-8 w-3/4 ${isRetro ? 'bg-current opacity-40' : 'bg-white/20 rounded'} mb-4`}></div>
+              <div className={`h-4 w-full ${isRetro ? 'bg-current opacity-30' : 'bg-white/10 rounded'} mb-2`}></div>
+              <div className={`h-4 w-full ${isRetro ? 'bg-current opacity-30' : 'bg-white/10 rounded'} mb-2`}></div>
+              <div className={`h-4 w-2/3 ${isRetro ? 'bg-current opacity-30' : 'bg-white/10 rounded'} mb-2`}></div>
             </div>
         </div>
       );
   }
 
-  // At this point we have info (potentially partial)
-  // If info exists but description is empty and isLoading is true, show content skeleton
+  // If no info and not loading (e.g., initial state or cleared), don't render anything
+  if (!info) return null;
+
   const showContentSkeleton = isLoading && (!info?.description || info.description === "");
 
   return (
-    <div className="absolute top-20 right-8 z-20 w-80 md:w-96 max-h-[calc(100vh-140px)] flex flex-col animate-in slide-in-from-right-12 fade-in duration-500">
-        <div className={`${theme.container} flex flex-col h-full overflow-hidden`}>
-          {/* Header - Always visible if info is present */}
+    <div className="absolute top-20 right-8 z-20 w-80 md:w-96 max-h-[calc(100vh-140px)] flex flex-col gap-3 animate-in slide-in-from-right-12 fade-in duration-500 pointer-events-none">
+        
+        {/* Main Info Box */}
+        <div className={`${theme.container} flex flex-col shrink min-h-0 overflow-hidden pointer-events-auto`}>
+          {/* Header */}
           <div className={`relative p-5 shrink-0 ${theme.header}`}>
             <div className="absolute top-3 right-3 flex gap-2">
-              <button 
-                onClick={onToggleFavorite}
-                className={`p-1 transition-colors ${theme.actionBtn}`}
-                title={isFavorite ? "Remove from Favorites" : "Add to Favorites"}
-              >
+              <button onClick={onToggleFavorite} className={`p-1 transition-colors ${theme.actionBtn}`} title={isFavorite ? "Remove from Favorites" : "Add to Favorites"}>
                 <Pin size={20} className={isFavorite ? "fill-current" : ""} />
               </button>
-              <button 
-                onClick={onClose}
-                className={`p-1 transition-colors ${theme.closeBtn}`}
-              >
+              <button onClick={onClose} className={`p-1 transition-colors ${theme.closeBtn}`}>
                 <X size={20} />
               </button>
             </div>
             
             <div className="flex flex-col gap-1 pr-12">
               <div className="flex items-center gap-2">
-                 <h2 className={`${titleSize} font-bold ${theme.headerTitle}`}>{info!.name}</h2>
-                 <span className={`${smallTextSize} uppercase px-1.5 py-0.5 ${theme.tag}`}>
-                  {info!.type}
-                </span>
+                 <h2 className={`${titleSize} font-bold ${theme.headerTitle}`}>{info.name}</h2>
+                 <span className={`${smallTextSize} uppercase px-1.5 py-0.5 ${theme.tag}`}>{info.type}</span>
               </div>
-              {/* Safe check for coordinates to prevent crash if undefined */}
               <p className={`${subtextSize} font-mono ${theme.subtext}`}>
-                {info!.coordinates?.lat ? info!.coordinates.lat.toFixed(2) : '0.00'}° N, 
-                {info!.coordinates?.lng ? info!.coordinates.lng.toFixed(2) : '0.00'}° E
+                {info.coordinates?.lat ? info.coordinates.lat.toFixed(2) : '0.00'}° N, 
+                {info.coordinates?.lng ? info.coordinates.lng.toFixed(2) : '0.00'}° E
               </p>
             </div>
           </div>
 
           {/* Tabs */}
           <div className={`flex border-b ${isRetro ? 'border-current opacity-60' : 'border-white/10'}`}>
-            <button 
-              onClick={() => setActiveTab('overview')}
-              className={`flex-1 py-2 ${tabTextSize} font-bold uppercase transition-colors flex items-center justify-center gap-1 ${activeTab === 'overview' ? theme.tabActive : theme.tabInactive}`}
-            >
+            <button onClick={() => setActiveTab('overview')} className={`flex-1 py-2 ${tabTextSize} font-bold uppercase transition-colors flex items-center justify-center gap-1 ${activeTab === 'overview' ? theme.tabActive : theme.tabInactive}`}>
               <Map size={14} /> Overview
             </button>
-            <button 
-              onClick={() => setActiveTab('news')}
-              className={`flex-1 py-2 ${tabTextSize} font-bold uppercase transition-colors flex items-center justify-center gap-1 ${activeTab === 'news' ? theme.tabActive : theme.tabInactive}`}
-            >
+            <button onClick={() => setActiveTab('news')} className={`flex-1 py-2 ${tabTextSize} font-bold uppercase transition-colors flex items-center justify-center gap-1 ${activeTab === 'news' ? theme.tabActive : theme.tabInactive}`}>
               <Newspaper size={14} /> News
             </button>
-            <button 
-              onClick={() => setActiveTab('notable')}
-              className={`flex-1 py-2 ${tabTextSize} font-bold uppercase transition-colors flex items-center justify-center gap-1 ${activeTab === 'notable' ? theme.tabActive : theme.tabInactive}`}
-            >
+            <button onClick={() => setActiveTab('notable')} className={`flex-1 py-2 ${tabTextSize} font-bold uppercase transition-colors flex items-center justify-center gap-1 ${activeTab === 'notable' ? theme.tabActive : theme.tabInactive}`}>
               <Crown size={14} /> Notable
             </button>
           </div>
 
           {/* Scrollable Content */}
           <div className="p-5 overflow-y-auto custom-scrollbar flex-1 relative">
-            
             {showContentSkeleton ? (
                <div className={`space-y-4 ${isRetro ? 'animate-pulse' : 'animate-pulse'}`}>
                   <div className={`h-4 w-full ${isRetro ? 'bg-current opacity-30' : 'bg-white/10 rounded'}`}></div>
@@ -365,73 +429,68 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, skin, i
                      <div className={`h-16 ${theme.card}`}></div>
                      <div className={`h-16 ${theme.card}`}></div>
                   </div>
-                  {isRetro && <div className="text-center mt-4 text-sm font-bold uppercase">Retrieving Data...</div>}
                </div>
             ) : (
                 <>
                 {activeTab === 'overview' && (
                 <div className="space-y-5 animate-in fade-in duration-300">
                     <div className="relative group/desc">
-                      {/* Added pr-8 to text to prevent overlap with absolute positioned copy button */}
                       <p className={`leading-relaxed ${bodySize} font-medium ${theme.bodyText} pr-8`}>
-                      {info!.description}
+                      {info.description}
                       </p>
                       <div className="absolute top-0 right-0 opacity-0 group-hover/desc:opacity-100 transition-opacity">
-                        <CopyButton text={info!.description} skin={skin} />
+                        <CopyButton text={info.description} skin={skin} />
                       </div>
                     </div>
 
-                    {(hasPopulation || hasClimate || wikiImage) && (
-                      <div className={`grid ${((hasPopulation || wikiImage) && hasClimate) ? 'grid-cols-2' : 'grid-cols-1'} gap-3`}>
-                        {hasPopulation ? (
+                    {(isValidData(info.population) || isValidData(info.climate) || wikiImage) && (
+                      <div className={`grid ${((isValidData(info.population) || wikiImage) && isValidData(info.climate)) ? 'grid-cols-2' : 'grid-cols-1'} gap-3`}>
+                        {isValidData(info.population) ? (
                           <div className={`p-3 ${theme.card}`}>
-                              {/* Header row with flex justify-between for copy button to avoid overlap */}
                               <div className={`flex items-center justify-between mb-1`}>
                                 <div className={`flex items-center gap-2 ${theme.icon}`}>
                                     <Users size={16} />
                                     <span className={`${smallTextSize} font-bold uppercase`}>Population</span>
                                 </div>
                                 <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <CopyButton text={info!.population || ""} skin={skin} />
+                                    <CopyButton text={info.population || ""} skin={skin} />
                                 </div>
                               </div>
-                              <p className={`${isRetro ? 'text-lg' : 'text-sm'} font-bold font-mono`}>{info!.population}</p>
+                              <p className={`${isRetro ? 'text-lg' : 'text-sm'} font-bold font-mono`}>{info.population}</p>
                           </div>
                         ) : wikiImage ? (
                           <div 
                             className={`p-0 overflow-hidden relative h-28 ${theme.card} group cursor-pointer`}
                             onClick={() => setExpandedImage(true)}
                           >
-                             <img src={wikiImage} alt={info!.name} className={`w-full h-full object-cover transition-transform duration-500 group-hover:scale-110 ${isRetro ? 'grayscale contrast-125' : ''}`} />
+                             <img src={wikiImage} alt={info.name} className={`w-full h-full object-cover transition-transform duration-500 group-hover:scale-110 ${isRetro ? 'grayscale contrast-125' : ''}`} />
                              <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-1.5 flex items-center gap-1">
                                 <ImageIcon size={12} className="text-white/80" />
                              </div>
-                             {/* Expand icon on hover */}
                              <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity bg-black/50 p-1 rounded-full text-white">
                                 <ExternalLink size={12} />
                              </div>
                           </div>
                         ) : null}
 
-                        {hasClimate && (
+                        {isValidData(info.climate) && (
                           <div className={`p-3 ${theme.card}`}>
-                              {/* Header row with flex justify-between for copy button to avoid overlap */}
                               <div className={`flex items-center justify-between mb-1`}>
                                 <div className={`flex items-center gap-2 ${theme.icon}`}>
                                     <Thermometer size={16} />
                                     <span className={`${smallTextSize} font-bold uppercase`}>Climate</span>
                                 </div>
                                 <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <CopyButton text={info!.climate || ""} skin={skin} />
+                                    <CopyButton text={info.climate || ""} skin={skin} />
                                 </div>
                               </div>
-                              <p className={`${isRetro ? 'text-lg' : 'text-sm'} font-bold`}>{info!.climate}</p>
+                              <p className={`${isRetro ? 'text-lg' : 'text-sm'} font-bold`}>{info.climate}</p>
                           </div>
                         )}
                       </div>
                     )}
 
-                    {hasFunFacts && (
+                    {info.funFacts && info.funFacts.length > 0 && (
                       <div className="relative group/facts">
                       <div className={`flex items-center justify-between mb-2 ${theme.icon}`}>
                           <div className="flex items-center gap-2">
@@ -439,11 +498,11 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, skin, i
                             <span className={`${isRetro ? 'text-sm' : 'text-xs'} font-bold uppercase`}>Quick Facts</span>
                           </div>
                           <div className="opacity-0 group-hover/facts:opacity-100 transition-opacity">
-                            <CopyButton text={info!.funFacts.join('\n')} skin={skin} />
+                            <CopyButton text={info.funFacts.join('\n')} skin={skin} />
                           </div>
                       </div>
                       <ul className="space-y-2">
-                          {info!.funFacts.map((fact, idx) => (
+                          {info.funFacts.map((fact, idx) => (
                           <li key={idx} className={`flex gap-3 ${bodySize} ${theme.bodyText}`}>
                               <span className={`block w-1.5 h-1.5 mt-2 flex-shrink-0 ${theme.listDot}`} />
                               {fact}
@@ -457,23 +516,20 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, skin, i
 
                 {activeTab === 'news' && (
                 <div className="space-y-4 animate-in fade-in duration-300">
-                    {info!.news && info!.news.length > 0 ? (
-                    info!.news.map((item, idx) => {
-                        const linkUrl = item.url || `https://www.google.com/search?q=${encodeURIComponent(item.headline + " " + info.name)}`;
+                    {info.news && info.news.length > 0 ? (
+                    info.news.map((item, idx) => {
+                        // Safety check for news item
+                        if (!item) return null;
+                        const linkUrl = item.url || `https://www.google.com/search?q=${encodeURIComponent((item.headline || "") + " " + info.name)}`;
                         return (
                             <div key={idx} className={`p-3 ${theme.card} group/news relative`}>
                                 <div className="pr-6">
-                                    <a 
-                                        href={linkUrl} 
-                                        target="_blank" 
-                                        rel="noopener noreferrer" 
-                                        className="block"
-                                    >
+                                    <a href={linkUrl} target="_blank" rel="noopener noreferrer" className="block">
                                         <div className="flex justify-between items-start gap-2">
-                                            <h4 className={`${bodySize} font-bold mb-1 ${theme.bodyText} group-hover/news:underline`}>{item.headline}</h4>
+                                            <h4 className={`${bodySize} font-bold mb-1 ${theme.bodyText} group-hover/news:underline`}>{item.headline || "Untitled"}</h4>
                                             <ExternalLink size={isRetro ? 14 : 12} className={`opacity-50 shrink-0 ${theme.icon}`} />
                                         </div>
-                                        <span className={`${smallTextSize} uppercase opacity-70 ${theme.subtext}`}>Source: {item.source}</span>
+                                        <span className={`${smallTextSize} uppercase opacity-70 ${theme.subtext}`}>Source: {item.source || "Unknown"}</span>
                                     </a>
                                 </div>
                                 <div className="absolute top-2 right-2 opacity-0 group-hover/news:opacity-100 transition-opacity z-10">
@@ -483,15 +539,10 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, skin, i
                         );
                     })
                     ) : (
-                    <p className={`${bodySize} italic ${theme.bodyText}`}>No recent news for {info!.name}.</p>
+                    <p className={`${bodySize} italic ${theme.bodyText}`}>No recent news for {info.name}.</p>
                     )}
-                    
-                    {info!.news && info!.news.length > 0 && (
-                        <button 
-                            onClick={handleLoadMore} 
-                            disabled={isNewsLoading}
-                            className={`w-full py-3 flex items-center justify-center gap-2 transition-all disabled:opacity-50 ${theme.loadMoreBtn}`}
-                        >
+                    {info.news && info.news.length > 0 && (
+                        <button onClick={handleLoadMore} disabled={isNewsLoading} className={`w-full py-3 flex items-center justify-center gap-2 transition-all disabled:opacity-50 ${theme.loadMoreBtn}`}>
                             {isNewsLoading ? <Loader2 size={16} className="animate-spin" /> : "MORE NEWS"}
                         </button>
                     )}
@@ -500,16 +551,9 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, skin, i
 
                 {activeTab === 'notable' && (
                 <div className="space-y-4 animate-in fade-in duration-300">
-                    {info!.notable && info!.notable.length > 0 ? (
-                    info!.notable.map((item, idx) => (
-                        <NotablePersonCard 
-                          key={idx}
-                          item={item}
-                          theme={theme}
-                          skin={skin}
-                          bodySize={bodySize}
-                          subtextSize={subtextSize}
-                        />
+                    {info.notable && info.notable.length > 0 ? (
+                    info.notable.filter(item => item && item.name).map((item, idx) => (
+                        <NotablePersonCard key={idx} item={item} theme={theme} skin={skin} bodySize={bodySize} subtextSize={subtextSize} />
                     ))
                     ) : (
                     <p className={`${bodySize} italic ${theme.bodyText}`}>No notable figures recorded in this database.</p>
@@ -518,8 +562,86 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, skin, i
                 )}
                 </>
             )}
-
           </div>
+        </div>
+
+        {/* My Notes Section - Always visible if info exists */}
+        <div className={`pointer-events-auto shrink-0 transition-all duration-300 ${theme.container} ${!isNotesExpanded ? 'hover:brightness-110 cursor-pointer' : ''}`}>
+             <div 
+               className={`px-5 py-3 flex items-center justify-between cursor-pointer ${isNotesExpanded ? 'border-b ' + (isRetro ? 'border-green-400/50' : 'border-white/10') : ''}`}
+               onClick={() => setIsNotesExpanded(!isNotesExpanded)}
+             >
+                <div className="flex items-center gap-2">
+                    <StickyNote size={16} className={theme.icon} />
+                    <span className={`font-bold uppercase ${isRetro ? 'text-lg' : 'text-sm'} ${theme.headerTitle}`}>My Notes</span>
+                    {notes.length > 0 && (
+                        <span className={`text-xs px-1.5 py-0.5 rounded-full ${isRetro ? 'bg-green-400 text-black' : 'bg-cyan-900 text-cyan-300'}`}>
+                            {notes.length}
+                        </span>
+                    )}
+                </div>
+                {isNotesExpanded ? <ChevronDown size={18} className={theme.subtext} /> : <ChevronUp size={18} className={theme.subtext} />}
+             </div>
+
+             {isNotesExpanded && (
+                 <div className="p-4 bg-opacity-50 animate-in slide-in-from-top-2 duration-300">
+                     {/* Add Note Input */}
+                     <form onSubmit={handleAddNote} className="mb-4 flex gap-2">
+                         <input 
+                            type="text" 
+                            value={newNote}
+                            onChange={(e) => setNewNote(e.target.value)}
+                            placeholder="Add a personal note..."
+                            className={`flex-1 px-3 py-2 outline-none text-sm transition-colors ${theme.notesInput}`}
+                         />
+                         <button 
+                            type="submit"
+                            disabled={!newNote.trim()}
+                            className={`p-2 transition-colors disabled:opacity-50 ${theme.actionBtn}`}
+                         >
+                            <Plus size={18} />
+                         </button>
+                     </form>
+
+                     {/* Notes List */}
+                     <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar">
+                         {notes.length === 0 ? (
+                             <p className={`text-center py-2 italic opacity-60 ${smallTextSize} ${theme.bodyText}`}>No notes yet.</p>
+                         ) : (
+                             notes.map((note) => (
+                                 <div key={note.id} className={`p-3 group relative ${theme.noteCard}`}>
+                                     {editingNoteId === note.id ? (
+                                         <div className="flex flex-col gap-2">
+                                             <textarea 
+                                                value={editNoteText}
+                                                onChange={(e) => setEditNoteText(e.target.value)}
+                                                className={`w-full p-2 text-sm bg-transparent border-b ${isRetro ? 'border-green-400 text-green-300' : 'border-cyan-400 text-white'} outline-none resize-none`}
+                                                rows={2}
+                                                autoFocus
+                                             />
+                                             <div className="flex justify-end gap-2">
+                                                 <button onClick={() => setEditingNoteId(null)} className="p-1 hover:text-red-400"><X size={14}/></button>
+                                                 <button onClick={() => saveEdit(note.id)} className="p-1 hover:text-green-400"><Save size={14}/></button>
+                                             </div>
+                                         </div>
+                                     ) : (
+                                        <>
+                                            <p className={`${bodySize} ${theme.bodyText} pr-6 break-words`}>{note.text}</p>
+                                            <p className={`text-[10px] mt-1 opacity-50 ${theme.subtext}`}>
+                                                {new Date(note.timestamp).toLocaleDateString()}
+                                            </p>
+                                            <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <button onClick={() => startEditing(note)} className={`p-1 ${isRetro ? 'hover:text-green-200' : 'hover:text-cyan-200'}`}><Edit2 size={12} /></button>
+                                                <button onClick={() => handleDeleteNote(note.id)} className={`p-1 hover:text-red-400`}><Trash2 size={12} /></button>
+                                            </div>
+                                        </>
+                                     )}
+                                 </div>
+                             ))
+                         )}
+                     </div>
+                 </div>
+             )}
         </div>
     </div>
   );
