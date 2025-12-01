@@ -168,9 +168,10 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, isNewsF
   // Ref to track if we've initialized the expanded state for the current location
   const locationInitializedRef = useRef<string | null>(null);
 
-  // Clean up wiki image when location changes to prevent stale images
+  // Clean up wiki image and reset tab when location changes
   useEffect(() => {
     setWikiImage(null);
+    setActiveTab('overview');
   }, [info?.name]);
 
   // Load Notes
@@ -344,11 +345,13 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, isNewsF
   const theme = themes[skin];
   const isRetro = skin !== 'modern';
 
-  const titleSize = isRetro ? 'text-3xl' : 'text-2xl';
+  // Reduced font size for retro to avoid wrapping issues (matches modern size 2xl instead of 3xl)
+  const titleSize = isRetro ? 'text-2xl' : 'text-2xl';
   const subtextSize = isRetro ? 'text-sm' : 'text-xs';
   const bodySize = isRetro ? 'text-lg' : 'text-sm';
   const smallTextSize = isRetro ? 'text-sm' : 'text-xs';
-  const tabTextSize = isRetro ? 'text-sm' : 'text-xs';
+  const tabTextSize = isRetro ? 'text-xl' : 'text-xs';
+  const tabIconSize = isRetro ? 18 : 14;
 
   if (expandedImage && wikiImage) {
       return (
@@ -414,13 +417,13 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, isNewsF
           {/* Tabs */}
           <div className={`flex border-b ${isRetro ? 'border-current opacity-60' : 'border-white/10'}`}>
             <button onClick={() => setActiveTab('overview')} className={`flex-1 py-2 ${tabTextSize} font-bold uppercase transition-colors flex items-center justify-center gap-1 ${activeTab === 'overview' ? theme.tabActive : theme.tabInactive}`}>
-              <Map size={14} /> Overview
+              <Map size={tabIconSize} /> Overview
             </button>
             <button onClick={() => setActiveTab('news')} className={`flex-1 py-2 ${tabTextSize} font-bold uppercase transition-colors flex items-center justify-center gap-1 ${activeTab === 'news' ? theme.tabActive : theme.tabInactive}`}>
-              <Newspaper size={14} /> News
+              <Newspaper size={tabIconSize} /> News
             </button>
             <button onClick={() => setActiveTab('notable')} className={`flex-1 py-2 ${tabTextSize} font-bold uppercase transition-colors flex items-center justify-center gap-1 ${activeTab === 'notable' ? theme.tabActive : theme.tabInactive}`}>
-              <Crown size={14} /> Notable
+              <Crown size={tabIconSize} /> Notable
             </button>
           </div>
 
@@ -462,7 +465,7 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, isNewsF
                                     <CopyButton text={info.population || ""} skin={skin} />
                                 </div>
                               </div>
-                              <p className={`${isRetro ? 'text-lg' : 'text-sm'} font-bold font-mono`}>{info.population}</p>
+                              <p className={`${isRetro ? 'text-base' : 'text-sm'} font-bold font-mono`}>{info.population}</p>
                           </div>
                         ) : wikiImage ? (
                           <div 
@@ -490,7 +493,7 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, isNewsF
                                     <CopyButton text={info.climate || ""} skin={skin} />
                                 </div>
                               </div>
-                              <p className={`${isRetro ? 'text-lg' : 'text-sm'} font-bold`}>{info.climate}</p>
+                              <p className={`${isRetro ? 'text-base' : 'text-sm'} font-bold`}>{info.climate}</p>
                           </div>
                         )}
                       </div>
@@ -525,7 +528,7 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, isNewsF
                     {isNewsFetching && !isMoreNewsLoading && info.news.length === 0 ? (
                        <div className="flex flex-col items-center justify-center py-8 opacity-50 animate-pulse">
                           <Loader2 size={24} className="animate-spin mb-2 text-current" />
-                          <p className={smallTextSize}>Intercepting live signals...</p>
+                          <p className={smallTextSize}>Updating news...</p>
                        </div>
                     ) : info.news && info.news.length > 0 ? (
                        <>
@@ -552,7 +555,7 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, isNewsF
                            disabled={isMoreNewsLoading}
                            className={`w-full py-3 mt-2 transition-colors ${theme.loadMoreBtn}`}
                          >
-                           {isMoreNewsLoading ? "Scanning..." : "Load More Signals"}
+                           {isMoreNewsLoading ? "Scanning..." : "Load More News"}
                          </button>
                        </>
                     ) : (
@@ -571,7 +574,7 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, isNewsF
                         <NotablePersonCard key={idx} item={item} theme={theme} skin={skin} bodySize={bodySize} subtextSize={subtextSize} />
                     ))
                     ) : (
-                    <p className={`${bodySize} italic ${theme.bodyText}`}>No notable figures recorded in this database.</p>
+                    <p className={`${bodySize} italic ${theme.bodyText}`}>No notable figures found for {info.name}.</p>
                     )}
                 </div>
                 )}

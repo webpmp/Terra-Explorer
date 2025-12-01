@@ -84,15 +84,23 @@ const RotationManager: React.FC<{
   isDragging: boolean; 
   autoRotate: boolean; 
   setAutoRotate: (v: boolean) => void;
-}> = ({ isDragging, autoRotate, setAutoRotate }) => {
+  onZoomChange: (isZoomedOut: boolean) => void;
+}> = ({ isDragging, autoRotate, setAutoRotate, onZoomChange }) => {
+  const wasZoomedOutRef = useRef(true);
+
   useFrame(({ camera }) => {
+    const dist = camera.position.length();
+    // Max distance is 5. Consider zoomed out when close to max.
+    const isZoomedOut = dist > 4.5;
+    
+    if (wasZoomedOutRef.current !== isZoomedOut) {
+      onZoomChange(isZoomedOut);
+      wasZoomedOutRef.current = isZoomedOut;
+    }
+
     if (isDragging) return;
     
     // Check if we are at max distance (zoomed all the way out)
-    // Max distance in CameraControls is set to 5
-    const dist = camera.position.length();
-    
-    // Use a threshold slightly less than 5 to account for floating point
     // If user zooms out to ~5 units, resume rotation
     if (dist > 4.9 && !autoRotate) {
       setAutoRotate(true);
@@ -140,8 +148,12 @@ const App: React.FC = () => {
   const [isDragging, setIsDragging] = useState(false); // Interaction with Camera Controls
   const [autoRotate, setAutoRotate] = useState(true);
   const [skin, setSkin] = useState<SkinType>('modern');
+  const [isZoomedOut, setIsZoomedOut] = useState(true);
   
-  // Track visibility of selected marker to pause/resume suggestions
+  // Track focus state to manage suggestions pausing
+  const [isFocused, setIsFocused] = useState(false);
+  
+  // Track visibility of selected marker (optional for other logic, but removed from paused suggestions logic per request)
   const [isMarkerVisible, setIsMarkerVisible] = useState(true);
   const isMarkerVisibleRef = useRef(true);
   
@@ -184,6 +196,7 @@ const App: React.FC = () => {
     setAutoRotate(false); 
     setMarkers([]); // Clear previous markers immediately
     setSelectedMarkerId(null);
+    setIsFocused(true);
 
     // Move camera to look at area
     if (cameraControlsRef.current) {
@@ -204,7 +217,7 @@ const App: React.FC = () => {
     if (newMarkers.length === 0) {
        newMarkers = [{
          id: `fallback-${Date.now()}`,
-         name: "Analyzed Location", // Generic name, will be resolved to real name upon click/load
+         name: "Loading Data", // Generic name, will be resolved to real name upon click/load
          lat: lat,
          lng: lng,
          populationClass: 'medium'
@@ -221,6 +234,7 @@ const App: React.FC = () => {
     setSearchError(null);
     setAutoRotate(false);
     setSelectedMarkerId(marker.id);
+    setIsFocused(true);
     
     // Set partial data so the panel title appears immediately
     setLocationInfo({
@@ -275,6 +289,7 @@ const App: React.FC = () => {
     setAutoRotate(false); // Stop rotation
     setMarkers([]); // Clear markers on new search
     setSelectedMarkerId(null);
+    setIsFocused(true);
 
     // Step 1: Resolve Location (Fast - No News)
     const result = await resolveLocationQuery(query);
@@ -352,6 +367,7 @@ const App: React.FC = () => {
     setLocationInfo(null);
     setSelectedMarkerId(null);
     setIsNewsFetching(false);
+    setIsFocused(false);
   };
 
   const handleToggleFavorite = () => {
@@ -412,9 +428,8 @@ const App: React.FC = () => {
     }
   };
 
-  // Determine if we should pause search suggestions
-  // Paused if a location is selected AND it is currently visible
-  const shouldPauseSuggestions = !!locationInfo && isMarkerVisible;
+  // Pause suggestions if user is focused on a location (clicked map/marker) AND not zoomed out
+  const shouldPauseSuggestions = isFocused && !isZoomedOut;
 
   return (
     <div className={`relative w-full h-screen bg-black overflow-hidden`}>
@@ -470,6 +485,10 @@ const App: React.FC = () => {
           isDragging={isDragging} 
           autoRotate={autoRotate} 
           setAutoRotate={setAutoRotate} 
+          onZoomChange={(zoomedOut) => {
+             setIsZoomedOut(zoomedOut);
+             if (zoomedOut) setIsFocused(false);
+          }}
         />
       </Canvas>
 

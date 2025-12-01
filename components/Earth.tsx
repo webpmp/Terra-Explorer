@@ -158,6 +158,7 @@ const AtmosphereGlowShader = {
 const UniversalMarker: React.FC<{ 
   position: THREE.Vector3, 
   color: string | THREE.Color, 
+  outlineColor: string | THREE.Color,
   size: number,
   hitSize: number,
   isRetro: boolean,
@@ -166,6 +167,7 @@ const UniversalMarker: React.FC<{
 }> = ({ 
   position, 
   color, 
+  outlineColor,
   size,
   hitSize,
   isRetro, 
@@ -212,7 +214,7 @@ const UniversalMarker: React.FC<{
       <mesh scale={[1.2, 1.2, 1.2]} pointerEvents="none">
            <sphereGeometry args={[size, 16, 16]} />
            <meshBasicMaterial 
-              color={isRetro ? "#000000" : "#ffffff"} 
+              color={outlineColor} 
               side={THREE.BackSide} 
               toneMapped={false} 
               transparent={!isRetro} // Transparent for modern (white halo effect)
@@ -241,6 +243,9 @@ const RotatingEarth = forwardRef<THREE.Mesh, EarthProps>((props, ref) => {
   // Marker Colors
   const markerColor = isModern ? '#ff3333' : isGreen ? '#a3e635' : '#fcd34d';
   const favoriteColor = isModern ? '#d946ef' : '#ffffff'; // Fuchsia for modern, White for retro
+  
+  // Marker Outline Colors
+  const outlineColor = isModern ? '#ffffff' : isGreen ? '#4ade80' : '#fbbf24';
 
   // Process and scale markers to avoid overlap
   const processedMarkers = useMemo(() => {
@@ -312,7 +317,7 @@ const RotatingEarth = forwardRef<THREE.Mesh, EarthProps>((props, ref) => {
         };
     });
 
-  }, [markers, favorites, showFavorites, markerColor, favoriteColor]);
+  }, [markers, favorites, showFavorites, markerColor, favoriteColor, outlineColor]);
 
   const innerMeshRef = useRef<THREE.Mesh>(null);
   useImperativeHandle(ref, () => innerMeshRef.current!);
@@ -472,6 +477,7 @@ const RotatingEarth = forwardRef<THREE.Mesh, EarthProps>((props, ref) => {
           key={marker.id}
           position={marker.position}
           color={marker.color}
+          outlineColor={outlineColor}
           size={marker.visualSize}
           hitSize={marker.hitSize}
           isRetro={!isModern}
@@ -509,7 +515,7 @@ const RotatingEarth = forwardRef<THREE.Mesh, EarthProps>((props, ref) => {
 
       {/* Atmosphere Glow - Hide for Green */}
       {!isGreen && (
-        <mesh scale={[1.15, 1.15, 1.15]}>
+        <mesh scale={[1.2, 1.2, 1.2]}>
             <sphereGeometry args={[1, 64, 64]} />
             <primitive object={atmosphereMaterial} attach="material" />
         </mesh>

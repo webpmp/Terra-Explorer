@@ -235,7 +235,7 @@ export const fetchLiveNews = async (query: string, exclude: string[] = []): Prom
       Instructions:
       1. Use the Google Search tool to find real articles. Search for "${query} news" or "${query} recent stories".
       2. Return a strict JSON array of objects.
-      3. For 'url', use the actual link found in the search results.
+      3. For 'url', use the actual link found in the search results. CRITICAL: Ensure the URL is valid, complete, and NOT truncated (do not end with '...'). If the URL is truncated in the source, try to find the full link or omit the article.
       4. **If the headline is in a foreign language, TRANSLATE it into English.**
       5. 'summary': A short, engaging 1-2 sentence summary of what the article is about.
       6. Ensure all string values are properly escaped.
@@ -272,12 +272,20 @@ export const fetchLiveNews = async (query: string, exclude: string[] = []): Prom
       items = data.news;
     }
 
+    // Process and filter invalid URLs
     return items.map((n: any) => ({
       headline: n.headline || "News Update",
       summary: n.summary || "",
       source: n.source || "Unknown",
       url: n.url || ""
-    }));
+    })).filter(n => {
+       // Check for common broken link patterns
+       if (!n.url) return false;
+       if (n.url.length < 10) return false;
+       if (n.url.endsWith('...') || n.url.endsWith('…')) return false;
+       if (!n.url.startsWith('http')) return false;
+       return true;
+    });
 
   } catch (error: any) {
     // Gracefully handle quota errors for news specifically, as it's secondary content
