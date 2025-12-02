@@ -2,50 +2,13 @@
 import React, { useRef, useImperativeHandle, forwardRef, useMemo, useEffect, useState, Suspense } from 'react';
 import { useFrame, useLoader } from '@react-three/fiber';
 import { TextureLoader } from 'three';
-import { Decal, useTexture } from '@react-three/drei';
+import { Decal, useTexture, Line } from '@react-three/drei';
 import * as THREE from 'three';
-import { SkinType, GeoCoordinates, MapMarker, FavoriteLocation } from '../types';
-
-// Fix for React Three Fiber elements not being recognized in JSX
-declare global {
-  namespace JSX {
-    interface IntrinsicElements {
-      group: any;
-      mesh: any;
-      sphereGeometry: any;
-      meshBasicMaterial: any;
-      meshPhongMaterial: any;
-      meshStandardMaterial: any;
-      primitive: any;
-      directionalLight: any;
-      ambientLight: any;
-      pointLight: any;
-      object3D: any;
-    }
-  }
-}
-
-declare module 'react' {
-  namespace JSX {
-    interface IntrinsicElements {
-      group: any;
-      mesh: any;
-      sphereGeometry: any;
-      meshBasicMaterial: any;
-      meshPhongMaterial: any;
-      meshStandardMaterial: any;
-      primitive: any;
-      directionalLight: any;
-      ambientLight: any;
-      pointLight: any;
-      object3D: any;
-    }
-  }
-}
+import { SkinType, GeoCoordinates, MapMarker, FavoriteLocation, Waypoint } from '../types';
 
 interface EarthProps {
   onLocationClick: (lat: number, lng: number, point: THREE.Vector3) => void;
-  onMarkerClick: (marker: MapMarker | FavoriteLocation, point: THREE.Vector3) => void;
+  onMarkerClick: (marker: MapMarker | FavoriteLocation | Waypoint, point: THREE.Vector3) => void;
   isInteracting: boolean;
   setIsInteracting: (v: boolean) => void;
   autoRotate: boolean;
@@ -55,6 +18,8 @@ interface EarthProps {
   favorites: FavoriteLocation[];
   showFavorites: boolean;
   selectedMarkerId: string | null;
+  routeWaypoints?: Waypoint[];
+  currentWaypointIndex?: number;
 }
 
 // Helper to convert Lat/Lng to 3D Cartesian coordinates
@@ -163,6 +128,8 @@ const UniversalMarker: React.FC<{
   hitSize: number,
   isRetro: boolean,
   isSelected: boolean,
+  isWaypoint?: boolean,
+  waypointIndex?: number,
   onClick: (e: any) => void 
 }> = ({ 
   position, 
@@ -172,6 +139,8 @@ const UniversalMarker: React.FC<{
   hitSize,
   isRetro, 
   isSelected,
+  isWaypoint,
+  waypointIndex,
   onClick 
 }) => {
   const meshRef = useRef<THREE.Group>(null);
@@ -206,7 +175,7 @@ const UniversalMarker: React.FC<{
           color={color} 
           toneMapped={false} 
           transparent={true}
-          opacity={0.5} 
+          opacity={isWaypoint ? 1 : 0.5} 
         />
       </mesh>
       
@@ -225,9 +194,53 @@ const UniversalMarker: React.FC<{
   );
 };
 
+const RouteLine: React.FC<{ 
+  waypoints: Waypoint[], 
+  color: string,
+  isRetro: boolean 
+}> = ({ waypoints, color, isRetro }) => {
+  const points = useMemo(() => {
+    if (waypoints.length < 2) return [];
+    
+    const curvedPoints: THREE.Vector3[] = [];
+    const radius = 1.01; // Slightly above earth
+    
+    for (let i = 0; i < waypoints.length - 1; i++) {
+        const start = latLngToVector3(waypoints[i].lat, waypoints[i].lng, radius);
+        const end = latLngToVector3(waypoints[i+1].lat, waypoints[i+1].lng, radius);
+        
+        // Generate points along the great circle arc
+        const segmentPoints = 30;
+        for (let j = 0; j <= segmentPoints; j++) {
+            const t = j / segmentPoints;
+            // Interpolate vector and re-normalize to sphere surface
+            const v = new THREE.Vector3().copy(start).lerp(end, t).normalize().multiplyScalar(radius);
+            curvedPoints.push(v);
+        }
+    }
+    return curvedPoints;
+  }, [waypoints]);
+
+  if (points.length === 0) return null;
+
+  return (
+    <Line
+      points={points}
+      color={color}
+      lineWidth={isRetro ? 2 : 1.5}
+      dashed={true}
+      dashScale={20}
+      dashSize={0.4}
+      gapSize={0.2}
+      transparent
+      opacity={0.8}
+    />
+  );
+};
+
 const RotatingEarth = forwardRef<THREE.Mesh, EarthProps>((props, ref) => {
   const groupRef = useRef<THREE.Group>(null);
-  const { autoRotate, isInteracting, skin, markers, favorites, showFavorites, selectedMarkerId } = props;
+  const { autoRotate, isInteracting, skin, markers, favorites, showFavorites, selectedMarkerId, routeWaypoints, currentWaypointIndex } = props;
 
   // Rotate the entire group
   useFrame((state, delta) => {
@@ -242,7 +255,8 @@ const RotatingEarth = forwardRef<THREE.Mesh, EarthProps>((props, ref) => {
 
   // Marker Colors
   const markerColor = isModern ? '#ff3333' : isGreen ? '#a3e635' : '#fcd34d';
-  const favoriteColor = isModern ? '#d946ef' : '#ffffff'; // Fuchsia for modern, White for retro
+  const favoriteColor = isModern ? '#d946ef' : '#ffffff'; 
+  const waypointColor = isModern ? '#00e5ff' : '#00e5ff'; // Cyan for route waypoints
   
   // Marker Outline Colors
   const outlineColor = isModern ? '#ffffff' : isGreen ? '#4ade80' : '#fbbf24';
@@ -251,7 +265,24 @@ const RotatingEarth = forwardRef<THREE.Mesh, EarthProps>((props, ref) => {
   const processedMarkers = useMemo(() => {
     const allMarkers: any[] = [];
 
-    // 1. Combine inputs into a uniform structure
+    // 0. Waypoints (High priority)
+    if (routeWaypoints && routeWaypoints.length > 0) {
+        routeWaypoints.forEach((wp, idx) => {
+             allMarkers.push({
+                type: 'waypoint',
+                data: wp,
+                lat: wp.lat,
+                lng: wp.lng,
+                baseSize: 0.02, // Larger base size for waypoints
+                color: waypointColor,
+                id: wp.id,
+                isWaypoint: true,
+                index: idx
+             });
+        });
+    }
+
+    // 1. Regular Markers
     markers.forEach(m => {
        if (m && typeof m.lat === 'number' && typeof m.lng === 'number') {
          allMarkers.push({
@@ -317,7 +348,7 @@ const RotatingEarth = forwardRef<THREE.Mesh, EarthProps>((props, ref) => {
         };
     });
 
-  }, [markers, favorites, showFavorites, markerColor, favoriteColor, outlineColor]);
+  }, [markers, favorites, showFavorites, markerColor, favoriteColor, outlineColor, routeWaypoints, waypointColor]);
 
   const innerMeshRef = useRef<THREE.Mesh>(null);
   useImperativeHandle(ref, () => innerMeshRef.current!);
@@ -439,6 +470,15 @@ const RotatingEarth = forwardRef<THREE.Mesh, EarthProps>((props, ref) => {
 
   return (
     <group ref={groupRef}>
+      {/* Route Lines */}
+      {routeWaypoints && routeWaypoints.length > 0 && (
+          <RouteLine 
+            waypoints={routeWaypoints} 
+            color={isModern ? "#00ffff" : (isGreen ? "#4ade80" : "#fbbf24")} 
+            isRetro={!isModern} 
+          />
+      )}
+
       {/* Earth Sphere */}
       <mesh 
         ref={innerMeshRef}
@@ -482,6 +522,8 @@ const RotatingEarth = forwardRef<THREE.Mesh, EarthProps>((props, ref) => {
           hitSize={marker.hitSize}
           isRetro={!isModern}
           isSelected={selectedMarkerId === marker.id}
+          isWaypoint={marker.isWaypoint}
+          waypointIndex={marker.index}
           onClick={(e) => handleMarkerClick(e, marker.data)}
         />
       ))}

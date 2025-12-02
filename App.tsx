@@ -7,45 +7,8 @@ import * as THREE from 'three';
 import Earth from './components/Earth';
 import InfoPanel from './components/InfoPanel';
 import Controls from './components/Controls';
-import { LocationInfo, SkinType, MapMarker, FavoriteLocation, LocationType } from './types';
-import { resolveLocationQuery, getInfoFromCoordinates, getNearbyPlaces, getMoreNews, fetchLiveNews } from './services/geminiService';
-
-// Fix for React Three Fiber elements not being recognized in JSX
-declare global {
-  namespace JSX {
-    interface IntrinsicElements {
-      group: any;
-      mesh: any;
-      sphereGeometry: any;
-      meshBasicMaterial: any;
-      meshPhongMaterial: any;
-      meshStandardMaterial: any;
-      primitive: any;
-      directionalLight: any;
-      ambientLight: any;
-      pointLight: any;
-      object3D: any;
-    }
-  }
-}
-
-declare module 'react' {
-  namespace JSX {
-    interface IntrinsicElements {
-      group: any;
-      mesh: any;
-      sphereGeometry: any;
-      meshBasicMaterial: any;
-      meshPhongMaterial: any;
-      meshStandardMaterial: any;
-      primitive: any;
-      directionalLight: any;
-      ambientLight: any;
-      pointLight: any;
-      object3D: any;
-    }
-  }
-}
+import { LocationInfo, SkinType, MapMarker, FavoriteLocation, LocationType, Waypoint } from './types';
+import { resolveLocationQuery, getInfoFromCoordinates, getNearbyPlaces, getMoreNews, fetchLiveNews, generateRoute } from './services/geminiService';
 
 // Helper to convert Lat/Lng to 3D Cartesian coordinates (Local Space)
 const latLngToVector3 = (lat: number, lng: number, radius: number = 1) => {
@@ -85,7 +48,8 @@ const RotationManager: React.FC<{
   autoRotate: boolean; 
   setAutoRotate: (v: boolean) => void;
   onZoomChange: (isZoomedOut: boolean) => void;
-}> = ({ isDragging, autoRotate, setAutoRotate, onZoomChange }) => {
+  disabled: boolean;
+}> = ({ isDragging, autoRotate, setAutoRotate, onZoomChange, disabled }) => {
   const wasZoomedOutRef = useRef(true);
 
   useFrame(({ camera }) => {
@@ -98,7 +62,7 @@ const RotationManager: React.FC<{
       wasZoomedOutRef.current = isZoomedOut;
     }
 
-    if (isDragging) return;
+    if (isDragging || disabled) return;
     
     // Check if we are at max distance (zoomed all the way out)
     // If user zooms out to ~5 units, resume rotation
@@ -150,6 +114,10 @@ const App: React.FC = () => {
   const [skin, setSkin] = useState<SkinType>('modern');
   const [isZoomedOut, setIsZoomedOut] = useState(true);
   
+  // Route State
+  const [routeWaypoints, setRouteWaypoints] = useState<Waypoint[]>([]);
+  const [currentWaypointIndex, setCurrentWaypointIndex] = useState<number>(-1);
+  
   // Track focus state to manage suggestions pausing
   const [isFocused, setIsFocused] = useState(false);
   
@@ -188,6 +156,54 @@ const App: React.FC = () => {
     localStorage.setItem('terraexplorer_favorites', JSON.stringify(favorites));
   }, [favorites]);
 
+  const loadWaypointData = useCallback(async (wp: Waypoint) => {
+     setIsLoading(true);
+     setIsNewsFetching(false);
+     setLocationInfo(null);
+     setSelectedMarkerId(wp.id);
+     setIsFocused(true);
+
+     // Move camera
+     if (earthRef.current && cameraControlsRef.current) {
+        const targetDist = 2.0; 
+        const localCameraVec = latLngToVector3(wp.lat, wp.lng, targetDist);
+        const worldCameraPos = localCameraVec.clone().applyMatrix4(earthRef.current.matrixWorld);
+        
+        cameraControlsRef.current.setLookAt(
+            worldCameraPos.x, worldCameraPos.y, worldCameraPos.z,
+            0, 0, 0,
+            true
+        );
+     }
+
+     // Fetch full info
+     // Use the waypoint context as a preliminary description or prepend it?
+     // For now, we fetch the standard encyclopedia data but we could use the context as a "special" description
+     const data = await getInfoFromCoordinates(wp.lat, wp.lng);
+     
+     if (data) {
+        // Prepend context to description if available
+        if (wp.context) {
+            data.description = `[From Route]: ${wp.context}\n\n${data.description}`;
+        }
+        setLocationInfo(data);
+        setIsLoading(false);
+
+        // Fetch news for this specific location
+        if (data.name) {
+            setIsNewsFetching(true);
+            const news = await fetchLiveNews(data.name);
+            setLocationInfo(prev => {
+                if (!prev || prev.name !== data.name) return prev;
+                return { ...prev, news };
+            });
+            setIsNewsFetching(false);
+        }
+     } else {
+         setIsLoading(false);
+     }
+  }, []);
+
   const handleGlobeClick = useCallback(async (lat: number, lng: number, point: THREE.Vector3) => {
     // When clicking empty space on the globe, fetch nearby markers but don't show full details yet
     setIsLoading(true);
@@ -195,6 +211,12 @@ const App: React.FC = () => {
     setSearchError(null);
     setAutoRotate(false); 
     setMarkers([]); // Clear previous markers immediately
+    
+    // If we are in route mode, clicking the globe exits route mode? 
+    // Or just deselects? Let's clear route for simplicity if user explores elsewhere manually
+    setRouteWaypoints([]);
+    setCurrentWaypointIndex(-1);
+    
     setSelectedMarkerId(null);
     setIsFocused(true);
 
@@ -212,35 +234,50 @@ const App: React.FC = () => {
 
     let newMarkers = await getNearbyPlaces(lat, lng);
     
-    // Fallback if no nearby places found (e.g. remote area, ocean, or API quota)
-    // Ensures the user always sees a marker at the clicked location
     if (newMarkers.length === 0) {
        newMarkers = [{
          id: `fallback-${Date.now()}`,
-         name: "Loading Data", // Generic name, will be resolved to real name upon click/load
+         name: "Loading Data",
          lat: lat,
          lng: lng,
          populationClass: 'medium'
        }];
     }
     
-    setMarkers(newMarkers); // Replace with new markers
+    setMarkers(newMarkers);
     setIsLoading(false);
   }, []);
 
-  const handleMarkerClick = useCallback(async (marker: MapMarker | FavoriteLocation, point: THREE.Vector3) => {
-    // When clicking a dot, show full details
-    // Populate partial info immediately for better UX
+  const handleMarkerClick = useCallback(async (marker: MapMarker | FavoriteLocation | Waypoint, point: THREE.Vector3) => {
     setSearchError(null);
     setAutoRotate(false);
     setSelectedMarkerId(marker.id);
     setIsFocused(true);
     
+    // Check if this marker is part of the current route
+    // The type guard 'context' in marker distinguishes a Waypoint, but we cast it safely below
+    const isRoutePoint = (marker as Waypoint).context !== undefined;
+
+    if (isRoutePoint) {
+        // If clicking a waypoint, set it as active index
+        const wp = marker as Waypoint;
+        const idx = routeWaypoints.findIndex(w => w.id === wp.id);
+        if (idx !== -1) {
+            setCurrentWaypointIndex(idx);
+            loadWaypointData(wp);
+            return;
+        }
+    } else {
+        // If clicking a normal marker, clear route
+        setRouteWaypoints([]);
+        setCurrentWaypointIndex(-1);
+    }
+    
     // Set partial data so the panel title appears immediately
     setLocationInfo({
         name: marker.name,
-        type: LocationType.POI, // Default until resolved
-        description: "", // Empty description triggers content skeleton
+        type: LocationType.POI, 
+        description: "",
         population: "",
         climate: "",
         funFacts: [],
@@ -262,42 +299,38 @@ const App: React.FC = () => {
         );
     }
 
-    // Step 1: Get Main Info (Fast)
     const data = await getInfoFromCoordinates(marker.lat, marker.lng);
-    
-    // Update State with Main Info
     setLocationInfo(data);
     setIsLoading(false);
 
-    // Step 2: Fetch News (Progressive)
     if (data && data.name) {
        setIsNewsFetching(true);
        const news = await fetchLiveNews(data.name);
        setLocationInfo(prev => {
-         if (!prev || prev.name !== data.name) return prev; // Guard against stale updates
+         if (!prev || prev.name !== data.name) return prev; 
          return { ...prev, news };
        });
        setIsNewsFetching(false);
     }
-  }, []);
+  }, [routeWaypoints, loadWaypointData]);
 
   const handleSearch = async (query: string) => {
     setIsLoading(true);
     setIsNewsFetching(false);
     setLocationInfo(null);
     setSearchError(null);
-    setAutoRotate(false); // Stop rotation
-    setMarkers([]); // Clear markers on new search
+    setAutoRotate(false);
+    setMarkers([]); 
+    setRouteWaypoints([]); // Clear route on search
+    setCurrentWaypointIndex(-1);
     setSelectedMarkerId(null);
     setIsFocused(true);
 
-    // Step 1: Resolve Location (Fast - No News)
     const result = await resolveLocationQuery(query);
     
     if (result && result.locationInfo && result.locationInfo.coordinates) {
       const { lat, lng } = result.locationInfo.coordinates;
       
-      // 1. Create a marker for the search result so the user sees where it is
       const searchMarker: MapMarker = {
         id: `search-${Date.now()}`,
         name: result.locationInfo.name,
@@ -308,31 +341,22 @@ const App: React.FC = () => {
       setMarkers([searchMarker]);
       setSelectedMarkerId(searchMarker.id);
       setLocationInfo(result.locationInfo);
-      setIsLoading(false); // Show info immediately
+      setIsLoading(false);
 
-      // 2. Calculate Positions
-      // Ensure target distance doesn't get too close to minDistance (1.2)
-      // Clamping minimum distance to 1.3 to avoid glitches
       const targetDist = Math.max(1.3, 3.0 - ((result.suggestedZoom / 10) * (3.0 - 1.2)));
-      
-      // Camera Position (zoomed out distance)
       const localCameraVec = latLngToVector3(lat, lng, targetDist);
 
       if (earthRef.current) {
-         // Apply Earth's rotation matrix to get World Coordinates
          const worldCameraPos = localCameraVec.clone().applyMatrix4(earthRef.current.matrixWorld);
-
-         // Move camera to look at the location from the calculated distance
          if (cameraControlsRef.current) {
           cameraControlsRef.current.setLookAt(
-            worldCameraPos.x, worldCameraPos.y, worldCameraPos.z, // Camera Position
-            0, 0, 0, // Target (Earth Center)
-            true // Transition
+            worldCameraPos.x, worldCameraPos.y, worldCameraPos.z,
+            0, 0, 0,
+            true 
           );
         }
       }
 
-      // Step 3: Fetch News (Progressive)
       if (result.locationInfo.name) {
         setIsNewsFetching(true);
         const news = await fetchLiveNews(result.locationInfo.name);
@@ -344,14 +368,48 @@ const App: React.FC = () => {
       }
 
     } else {
-      // Handle failed search
       setSearchError(`Could not find location: "${query}"`);
       setIsLoading(false);
     }
   };
 
+  const handleTraceRoute = async (text: string) => {
+      setIsLoading(true);
+      setSearchError(null);
+      setLocationInfo(null);
+      setAutoRotate(false);
+      setMarkers([]); // Clear normal markers
+      setIsFocused(true);
+      
+      const waypoints = await generateRoute(text);
+      
+      if (waypoints.length > 0) {
+          setRouteWaypoints(waypoints);
+          setCurrentWaypointIndex(0);
+          loadWaypointData(waypoints[0]);
+      } else {
+          setSearchError("No identifiable locations found in the text.");
+          setIsLoading(false);
+      }
+  };
+
+  const handleNextWaypoint = () => {
+      if (currentWaypointIndex < routeWaypoints.length - 1) {
+          const nextIdx = currentWaypointIndex + 1;
+          setCurrentWaypointIndex(nextIdx);
+          loadWaypointData(routeWaypoints[nextIdx]);
+      }
+  };
+
+  const handlePrevWaypoint = () => {
+      if (currentWaypointIndex > 0) {
+          const prevIdx = currentWaypointIndex - 1;
+          setCurrentWaypointIndex(prevIdx);
+          loadWaypointData(routeWaypoints[prevIdx]);
+      }
+  };
+
   const handleZoomIn = () => {
-    // Zooming disables auto-rotate implicitly by changing distance or triggering controls
     if (cameraControlsRef.current) {
       cameraControlsRef.current.dolly(1, true);
     }
@@ -368,6 +426,7 @@ const App: React.FC = () => {
     setSelectedMarkerId(null);
     setIsNewsFetching(false);
     setIsFocused(false);
+    // Do not clear route here, just close panel. Route stays visible on globe.
   };
 
   const handleToggleFavorite = () => {
@@ -396,7 +455,6 @@ const App: React.FC = () => {
     
     setLocationInfo(prev => {
        if(!prev) return null;
-       // Filter duplicates by headline
        const uniqueNewNews = newNews.filter(n => !prev.news.some(pn => pn.headline === n.headline));
        return {
           ...prev,
@@ -405,13 +463,10 @@ const App: React.FC = () => {
     });
   }, [locationInfo]);
 
-  // Safe check using optional chaining for coordinates
-  // This prevents crash if coordinates are missing or favorites array has corrupt entries
   const isCurrentLocationFavorite = locationInfo && locationInfo.coordinates 
     ? favorites.some(f => f && typeof f.lat === 'number' && f.name === locationInfo.name && Math.abs(f.lat - locationInfo.coordinates.lat) < 0.01) 
     : false;
 
-  // Dynamic Styles based on skin
   const getHeaderStyle = () => {
     switch (skin) {
       case 'retro-green': return 'text-green-300 font-retro tracking-widest';
@@ -428,23 +483,17 @@ const App: React.FC = () => {
     }
   };
 
-  // Pause suggestions if user is focused on a location (clicked map/marker) AND not zoomed out
   const shouldPauseSuggestions = isFocused && !isZoomedOut;
 
   return (
     <div className={`relative w-full h-screen bg-black overflow-hidden`}>
       {/* 3D Scene */}
       <Canvas camera={{ position: [0, 0, 3], fov: 45 }}>
-        {/* Cinematic Lighting Setup */}
         <ambientLight intensity={skin === 'modern' ? 0.4 : 1.5} color={skin === 'modern' ? "#ccccff" : "#ffffff"} />
-        
-        {/* Dynamic Sun that follows camera */}
         <Sun skin={skin} />
-
         {skin === 'modern' && (
            <pointLight position={[-10, 0, -5]} intensity={1.0} color="#0044ff" distance={20} />
         )}
-        
         <Stars radius={300} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
         
         <Earth 
@@ -460,6 +509,8 @@ const App: React.FC = () => {
           favorites={favorites}
           showFavorites={showFavorites}
           selectedMarkerId={selectedMarkerId}
+          routeWaypoints={routeWaypoints}
+          currentWaypointIndex={currentWaypointIndex}
         />
         
         <VisibilityTracker 
@@ -489,6 +540,7 @@ const App: React.FC = () => {
              setIsZoomedOut(zoomedOut);
              if (zoomedOut) setIsFocused(false);
           }}
+          disabled={isLoading || routeWaypoints.length > 0 || !!locationInfo || markers.length > 0}
         />
       </Canvas>
 
@@ -542,10 +594,17 @@ const App: React.FC = () => {
         isFavorite={isCurrentLocationFavorite}
         onToggleFavorite={handleToggleFavorite}
         onLoadMoreNews={handleLoadMoreNews}
+        routeNav={routeWaypoints.length > 0 ? {
+            current: currentWaypointIndex + 1,
+            total: routeWaypoints.length,
+            onNext: handleNextWaypoint,
+            onPrev: handlePrevWaypoint
+        } : undefined}
       />
 
       <Controls 
         onSearch={handleSearch} 
+        onTraceRoute={handleTraceRoute}
         onZoomIn={handleZoomIn} 
         onZoomOut={handleZoomOut}
         isSearching={isLoading}

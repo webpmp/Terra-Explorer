@@ -7,6 +7,7 @@ interface ControlsProps {
   onZoomIn: () => void;
   onZoomOut: () => void;
   onSearch: (query: string) => void;
+  onTraceRoute: (text: string) => void;
   isSearching: boolean;
   searchError?: string | null;
   skin: SkinType;
@@ -14,6 +15,15 @@ interface ControlsProps {
   onToggleShowFavorites: () => void;
   paused: boolean;
 }
+
+// Custom Icon for Trace Route
+const TraceRouteIcon = () => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="6" cy="12" r="3" />
+        <circle cx="18" cy="12" r="3" />
+        <path d="M9 12h6" strokeDasharray="2 2" />
+    </svg>
+);
 
 // Significantly expanded data for suggestions
 const historicalEvents = [
@@ -115,6 +125,7 @@ const Controls: React.FC<ControlsProps> = ({
   onZoomIn, 
   onZoomOut, 
   onSearch, 
+  onTraceRoute,
   isSearching, 
   searchError,
   skin, 
@@ -125,6 +136,8 @@ const Controls: React.FC<ControlsProps> = ({
   const [query, setQuery] = useState("");
   const [placeholder, setPlaceholder] = useState("Search location...");
   const [isFocused, setIsFocused] = useState(false);
+  const [showTraceInput, setShowTraceInput] = useState(false);
+  const [traceText, setTraceText] = useState("");
   const prevPausedRef = useRef(paused);
 
   // Initialize placeholder on mount
@@ -157,12 +170,19 @@ const Controls: React.FC<ControlsProps> = ({
     if (query.trim()) {
       onSearch(query);
     } else if (placeholder !== "Search location..." && placeholder !== "SEARCH LOCATION...") {
-      // Use the suggested tip as the search query if the input is empty
-      // Remove trailing ellipsis for a cleaner query
       const cleanQuery = placeholder.replace(/\.\.\.$/, "");
       setQuery(cleanQuery);
       onSearch(cleanQuery);
     }
+  };
+  
+  const handleTraceSubmit = (e: React.FormEvent) => {
+      e.preventDefault();
+      if (traceText.trim()) {
+          onTraceRoute(traceText);
+          setShowTraceInput(false);
+          setTraceText("");
+      }
   };
 
   const themes = {
@@ -181,7 +201,8 @@ const Controls: React.FC<ControlsProps> = ({
       resetBtn: "text-gray-400 hover:text-white mr-2 p-1 rounded-full hover:bg-white/10 transition-colors",
       glow: "absolute inset-0 bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full blur opacity-20 group-hover:opacity-40",
       error: "bg-red-900/80 border border-red-500 text-white text-sm px-4 py-2 rounded-lg backdrop-blur-md flex items-center gap-2",
-      copyright: "text-white/40 font-sans"
+      copyright: "text-white/40 font-sans",
+      modal: "bg-black/90 backdrop-blur-xl border border-cyan-400/30 text-white rounded-xl shadow-2xl"
     },
     'retro-green': {
       btn: "bg-black border border-green-400 text-green-300 hover:bg-green-400 hover:text-black rounded-none font-retro",
@@ -196,7 +217,8 @@ const Controls: React.FC<ControlsProps> = ({
       resetBtn: "text-green-300 hover:text-green-100 mr-2 p-1",
       glow: "hidden",
       error: "bg-black border border-green-400 text-green-300 font-retro px-4 py-2 uppercase blinking",
-      copyright: "text-green-400/60 font-retro uppercase tracking-widest"
+      copyright: "text-green-400/60 font-retro uppercase tracking-widest",
+      modal: "bg-black border-2 border-green-400 text-green-300 font-retro shadow-[0_0_20px_rgba(74,222,128,0.2)] rounded-none"
     },
     'retro-amber': {
       btn: "bg-black border border-amber-400 text-amber-300 hover:bg-amber-400 hover:text-black rounded-none font-retro",
@@ -211,7 +233,8 @@ const Controls: React.FC<ControlsProps> = ({
       resetBtn: "text-amber-300 hover:text-amber-100 mr-2 p-1",
       glow: "hidden",
       error: "bg-black border border-amber-400 text-amber-300 font-retro px-4 py-2 uppercase blinking",
-      copyright: "text-amber-400/60 font-retro uppercase tracking-widest"
+      copyright: "text-amber-400/60 font-retro uppercase tracking-widest",
+      modal: "bg-black border-2 border-amber-400 text-amber-300 font-retro shadow-[0_0_20px_rgba(251,191,36,0.2)] rounded-none"
     }
   };
 
@@ -230,8 +253,45 @@ const Controls: React.FC<ControlsProps> = ({
         </div>
       )}
 
+      {/* Trace Route Modal */}
+      {showTraceInput && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm pointer-events-auto">
+              <div className={`w-full max-w-lg p-6 relative flex flex-col gap-4 ${theme.modal}`}>
+                  <button onClick={() => setShowTraceInput(false)} className={`absolute top-4 right-4 p-1 hover:opacity-70`}>
+                      <X size={20} />
+                  </button>
+                  <h2 className="text-xl font-bold uppercase tracking-wide">Trace Route</h2>
+                  <p className="text-sm opacity-70">Paste an article, URL, or text block. The system will identify locations and create a connected journey.</p>
+                  <form onSubmit={handleTraceSubmit} className="flex flex-col gap-4">
+                      <textarea 
+                        value={traceText}
+                        onChange={(e) => setTraceText(e.target.value)}
+                        placeholder="Paste text here..."
+                        className={`w-full h-32 p-3 bg-transparent border ${skin === 'modern' ? 'border-white/20 rounded-lg' : 'border-current rounded-none'} outline-none resize-none focus:border-opacity-100 transition-colors`}
+                        autoFocus
+                      />
+                      <button 
+                        type="submit" 
+                        disabled={!traceText.trim()}
+                        className={`py-3 font-bold uppercase tracking-widest transition-all ${theme.btn} ${!traceText.trim() ? 'opacity-50 cursor-not-allowed' : 'hover:scale-[1.02]'}`}
+                      >
+                          Generate Route
+                      </button>
+                  </form>
+              </div>
+          </div>
+      )}
+
       {/* Zoom & View Controls */}
       <div className="flex gap-2 pointer-events-auto">
+        <button 
+          onClick={() => setShowTraceInput(true)}
+          className={`p-3 transition-all active:scale-95 ${theme.btn}`}
+          aria-label="Trace Route"
+          title="Trace Route from Text"
+        >
+           <TraceRouteIcon />
+        </button>
         <button 
           onClick={onToggleShowFavorites}
           className={`p-3 transition-all active:scale-95 ${theme.btn} ${showFavorites ? theme.favActive : ''}`}

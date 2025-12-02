@@ -59,6 +59,14 @@ export interface FavoriteLocation {
   lng: number;
 }
 
+export interface Waypoint {
+  id: string;
+  name: string;
+  lat: number;
+  lng: number;
+  context: string;
+}
+
 export type SkinType = 'modern' | 'retro-green' | 'retro-amber';
 
 // Fix for React Three Fiber elements not being recognized in JSX

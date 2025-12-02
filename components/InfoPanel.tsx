@@ -4,7 +4,7 @@ import { LocationInfo, SkinType, NotableItem } from '../types';
 import { 
   X, Users, Thermometer, Info, Newspaper, Crown, Map, Pin, ExternalLink, Loader2,
   BookOpen, Rocket, Trophy, Music, FlaskConical, Palette, Clapperboard, Image as ImageIcon,
-  Copy, Check, ChevronDown, ChevronUp, Plus, Trash2, Edit2, Save, StickyNote
+  Copy, Check, ChevronDown, ChevronUp, Plus, Trash2, Edit2, Save, StickyNote, ChevronLeft, ChevronRight
 } from 'lucide-react';
 
 interface InfoPanelProps {
@@ -16,6 +16,12 @@ interface InfoPanelProps {
   isFavorite: boolean;
   onToggleFavorite: () => void;
   onLoadMoreNews: () => Promise<void>;
+  routeNav?: {
+    current: number;
+    total: number;
+    onNext: () => void;
+    onPrev: () => void;
+  };
 }
 
 interface Note {
@@ -152,7 +158,7 @@ const NotablePersonCard: React.FC<{
   );
 };
 
-const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, isNewsFetching, skin, isFavorite, onToggleFavorite, onLoadMoreNews }) => {
+const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, isNewsFetching, skin, isFavorite, onToggleFavorite, onLoadMoreNews, routeNav }) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'news' | 'notable'>('overview');
   const [isMoreNewsLoading, setIsMoreNewsLoading] = useState(false);
   const [wikiImage, setWikiImage] = useState<string | null>(null);
@@ -302,7 +308,8 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, isNewsF
       actionBtn: "hover:bg-white/20 text-white rounded-full",
       loadMoreBtn: "bg-white/5 border border-white/20 hover:bg-white/10 text-cyan-300 rounded-lg text-xs tracking-widest uppercase font-bold",
       notesInput: "bg-black/40 border border-white/20 text-white placeholder-gray-400 focus:border-cyan-400 rounded-lg",
-      noteCard: "bg-black/40 border border-white/10 rounded-lg"
+      noteCard: "bg-black/40 border border-white/10 rounded-lg",
+      navBtn: "bg-white/10 hover:bg-white/20 text-white border border-white/10"
     },
     'retro-green': {
       container: "bg-black border-2 border-green-400 shadow-[0_0_20px_rgba(74,222,128,0.2)] text-green-300 font-retro tracking-widest",
@@ -320,7 +327,8 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, isNewsF
       actionBtn: "hover:bg-green-400 hover:text-black text-green-300 border border-green-400 rounded-none",
       loadMoreBtn: "bg-green-900/30 border border-green-400 hover:bg-green-400 hover:text-black text-green-300 rounded-none text-sm tracking-widest uppercase font-bold font-retro",
       notesInput: "bg-black border border-green-400 text-green-300 placeholder-green-400/50 focus:bg-green-900/20 rounded-none font-retro",
-      noteCard: "bg-black border border-green-400 rounded-none"
+      noteCard: "bg-black border border-green-400 rounded-none",
+      navBtn: "bg-black border border-green-400 hover:bg-green-400 hover:text-black text-green-300"
     },
     'retro-amber': {
       container: "bg-black border-2 border-amber-400 shadow-[0_0_20px_rgba(251,191,36,0.2)] text-amber-300 font-retro tracking-widest",
@@ -338,7 +346,8 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, isNewsF
       actionBtn: "hover:bg-amber-400 hover:text-black text-amber-300 border border-amber-400 rounded-none",
       loadMoreBtn: "bg-amber-900/30 border border-amber-400 hover:bg-amber-400 hover:text-black text-amber-300 rounded-none text-sm tracking-widest uppercase font-bold font-retro",
       notesInput: "bg-black border border-amber-400 text-amber-300 placeholder-amber-400/50 focus:bg-amber-900/20 rounded-none font-retro",
-      noteCard: "bg-black border border-amber-400 rounded-none"
+      noteCard: "bg-black border border-amber-400 rounded-none",
+      navBtn: "bg-black border border-amber-400 hover:bg-amber-400 hover:text-black text-amber-300"
     }
   };
 
@@ -413,6 +422,21 @@ const InfoPanel: React.FC<InfoPanelProps> = ({ info, onClose, isLoading, isNewsF
               </p>
             </div>
           </div>
+
+          {/* Route Navigation */}
+          {routeNav && (
+            <div className={`p-3 border-b flex items-center justify-between ${isRetro ? 'border-current opacity-80' : 'border-white/10 bg-white/5'}`}>
+                <button onClick={routeNav.onPrev} className={`p-1.5 rounded-full ${theme.navBtn}`}>
+                    <ChevronLeft size={16} />
+                </button>
+                <span className={`text-xs font-bold uppercase tracking-widest ${theme.subtext}`}>
+                    Waypoint {routeNav.current} of {routeNav.total}
+                </span>
+                <button onClick={routeNav.onNext} className={`p-1.5 rounded-full ${theme.navBtn}`}>
+                    <ChevronRight size={16} />
+                </button>
+            </div>
+          )}
 
           {/* Tabs */}
           <div className={`flex border-b ${isRetro ? 'border-current opacity-60' : 'border-white/10'}`}>

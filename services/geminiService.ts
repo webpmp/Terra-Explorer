@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { LocationInfo, LocationType, SearchResult, MapMarker, NewsItem } from "../types";
+import { LocationInfo, LocationType, SearchResult, MapMarker, NewsItem, Waypoint } from "../types";
 
 // Ensure API key is available
 const apiKey = process.env.API_KEY;
@@ -40,7 +40,7 @@ const generateContentWithRetry = async (params: any, retries = 3): Promise<any> 
   }
 };
 
-// Schema for the static/encyclopedic data (News is fetched separately via Search tool)
+// Schema for the static/encyclopedic data
 const mainInfoSchemaConfig = {
   type: Type.OBJECT,
   properties: {
@@ -83,16 +83,15 @@ const cleanJsonString = (str: string): string => {
   if (!str) return "";
   let cleaned = str;
   
-  // Aggressively remove markdown code blocks markers anywhere in the string
-  // This helps if the model puts text before the block and we extracted the whole thing
+  // Remove markdown code blocks
   cleaned = cleaned.replace(/```json/gi, '');
   cleaned = cleaned.replace(/```/g, '');
   
-  // Remove literal ellipses "..." which models sometimes use to indicate "more items"
-  // This causes invalid JSON.
+  // Remove literal ellipses "..." or unicode ellipses which models sometimes use to indicate truncation
   cleaned = cleaned.replace(/\.\.\./g, '');
+  cleaned = cleaned.replace(/\u2026/g, ''); // Use unicode escape for ellipsis
   
-  // Remove trailing commas before closing braces/brackets (common model error)
+  // Remove trailing commas before closing braces/brackets
   cleaned = cleaned.replace(/,(\s*[\]}])/g, '$1');
   
   return cleaned.trim();
@@ -101,28 +100,40 @@ const cleanJsonString = (str: string): string => {
 // Helper to attempt repairing truncated JSON
 const repairTruncatedJson = (jsonStr: string): string => {
   let fixed = jsonStr.trim();
-  
-  // If it's completely empty, nothing to do
   if (!fixed) return "{}";
 
-  // Remove potential trailing comma
-  fixed = fixed.replace(/,\s*$/, '');
+  // 1. Handle unclosed strings
+  // Count double quotes that are NOT escaped
+  let inString = false;
+  let isEscaped = false;
   
-  // Check if we are inside a string (odd number of non-escaped quotes)
-  const quoteCount = (fixed.match(/"/g) || []).length - (fixed.match(/\\"/g) || []).length;
-  if (quoteCount % 2 !== 0) {
-      // Close the string
+  for (let i = 0; i < fixed.length; i++) {
+      if (fixed[i] === '\\') {
+          isEscaped = !isEscaped;
+      } else {
+          if (fixed[i] === '"' && !isEscaped) {
+              inString = !inString;
+          }
+          isEscaped = false;
+      }
+  }
+
+  // If we ended inside a string, close it
+  if (inString) {
       fixed += '"';
   }
 
-  // Count braces/brackets
-  const openBraces = (fixed.match(/{/g) || []).length;
-  const closeBraces = (fixed.match(/}/g) || []).length;
-  const openBrackets = (fixed.match(/\[/g) || []).length;
-  const closeBrackets = (fixed.match(/\]/g) || []).length;
+  // 2. Handle missing closing braces/brackets
+  // We strip strings temporarily to count structural braces accurately
+  const stripped = fixed.replace(/"([^"\\]*(\\.[^"\\]*)*)"/g, '""');
+  
+  const openBraces = (stripped.match(/{/g) || []).length;
+  const closeBraces = (stripped.match(/}/g) || []).length;
+  const openBrackets = (stripped.match(/\[/g) || []).length;
+  const closeBrackets = (stripped.match(/\]/g) || []).length;
 
   // Append missing closing tokens. 
-  // Heuristic: Close objects '}' before arrays ']' because usually we are deeper in an object.
+  // Order matters: usually we are deep inside objects, so close } then ]
   for (let i = 0; i < (openBraces - closeBraces); i++) fixed += '}';
   for (let i = 0; i < (openBrackets - closeBrackets); i++) fixed += ']';
   
@@ -133,33 +144,30 @@ const repairTruncatedJson = (jsonStr: string): string => {
 const safeJsonParse = (text: string) => {
   if (!text) return null;
 
-  // 1. Try extracting from markdown code blocks using regex first (most reliable if present)
-  // We use [\s\S]*? to match across newlines
+  // 1. Try extracting from markdown code blocks first
   const markdownMatch = text.match(/```(?:json)?([\s\S]*?)```/);
   if (markdownMatch) {
     try {
       const innerCleaned = cleanJsonString(markdownMatch[1]);
       return JSON.parse(innerCleaned);
     } catch (e) {
-       // Try repairing the inner content
        try {
          return JSON.parse(repairTruncatedJson(cleanJsonString(markdownMatch[1])));
        } catch (e2) {
-         // Continue to other methods
+         // Continue
        }
     }
   }
 
-  // 2. Brute force: find the first '{' or '[' and the last '}' or ']'
-  // This handles cases where there is conversational text BEFORE the JSON but no markdown blocks
+  // 2. Brute force: find the first '{' or '['
   const firstOpenBrace = text.indexOf('{');
   const firstOpenBracket = text.indexOf('[');
   let startIdx = -1;
   let endIdx = -1;
 
-  // Determine if we are looking for an object or an array based on which comes first
   if (firstOpenBrace !== -1 && (firstOpenBracket === -1 || firstOpenBrace < firstOpenBracket)) {
       startIdx = firstOpenBrace;
+      // Use lastIndexOf, but if it's broken, we might take the whole string
       endIdx = text.lastIndexOf('}');
   } else if (firstOpenBracket !== -1) {
       startIdx = firstOpenBracket;
@@ -167,14 +175,13 @@ const safeJsonParse = (text: string) => {
   }
   
   if (startIdx !== -1) {
-    // If endIdx is missing or before start (truncation), try to use the end of string
+    // If endIdx is missing (truncation) or before start, take to end of text
     const actualEndIdx = (endIdx !== -1 && endIdx > startIdx) ? endIdx + 1 : text.length;
     const jsonStr = text.substring(startIdx, actualEndIdx);
     
     try {
       return JSON.parse(cleanJsonString(jsonStr));
     } catch (e) {
-       // Try repairing this substring
        try {
          return JSON.parse(repairTruncatedJson(cleanJsonString(jsonStr)));
        } catch (e2) {
@@ -188,21 +195,17 @@ const safeJsonParse = (text: string) => {
   try {
     return JSON.parse(cleaned);
   } catch (e) {
-    // Continue
+      // One final attempt at repair on the whole string
+      try {
+        return JSON.parse(repairTruncatedJson(cleaned));
+      } catch (e2) {
+        // Ignore
+      }
   }
 
-  // 4. Heuristic: If text is a conversational refusal, suppress error.
+  // 4. Suppress conversational refusals
   const lower = text.toLowerCase().trim();
-  if (
-      lower.startsWith("i am") || 
-      lower.startsWith("i cannot") || 
-      lower.startsWith("sorry") || 
-      lower.startsWith("unfortunately") || 
-      lower.startsWith("the search") ||
-      lower.startsWith("here is") ||
-      lower.startsWith("no news") ||
-      lower.startsWith("please")
-  ) {
+  if (lower.startsWith("i am") || lower.startsWith("sorry") || lower.startsWith("i cannot")) {
       return null;
   }
   
@@ -210,15 +213,10 @@ const safeJsonParse = (text: string) => {
   return null;
 };
 
-// Separate function to fetch news using Google Search Grounding
 export const fetchLiveNews = async (query: string, exclude: string[] = []): Promise<NewsItem[]> => {
   try {
     const currentDate = new Date().toLocaleDateString("en-US", { year: 'numeric', month: 'long', day: 'numeric' });
-    
-    // If we are asking for more news (exclude list exists), ask for more items to ensure we get unique ones
     const count = exclude.length > 0 ? 5 : 3;
-    
-    // Sanitize exclude list to avoid massive prompts
     const excludeList = exclude.slice(0, 10).map(s => `"${s.substring(0, 50)}..."`).join(', ');
 
     const prompt = `
@@ -238,8 +236,7 @@ export const fetchLiveNews = async (query: string, exclude: string[] = []): Prom
       3. For 'url', use the actual link found in the search results. CRITICAL: Ensure the URL is valid, complete, and NOT truncated (do not end with '...'). If the URL is truncated in the source, try to find the full link or omit the article.
       4. **If the headline is in a foreign language, TRANSLATE it into English.**
       5. 'summary': A short, engaging 1-2 sentence summary of what the article is about.
-      6. Ensure all string values are properly escaped.
-      7. Output ONLY the JSON array.
+      6. Output ONLY the JSON array.
       
       Format:
       [
@@ -258,7 +255,6 @@ export const fetchLiveNews = async (query: string, exclude: string[] = []): Prom
       config: {
         tools: [{ googleSearch: {} }],
         maxOutputTokens: 4000,
-        // responseMimeType cannot be used with googleSearch
       }
     });
 
@@ -272,31 +268,21 @@ export const fetchLiveNews = async (query: string, exclude: string[] = []): Prom
       items = data.news;
     }
 
-    // Process and filter invalid URLs
     return items.map((n: any) => ({
       headline: n.headline || "News Update",
       summary: n.summary || "",
       source: n.source || "Unknown",
       url: n.url || ""
     })).filter(n => {
-       // Check for common broken link patterns
        if (!n.url) return false;
        if (n.url.length < 10) return false;
-       if (n.url.endsWith('...') || n.url.endsWith('…')) return false;
+       if (n.url.includes('...')) return false; 
        if (!n.url.startsWith('http')) return false;
        return true;
     });
 
   } catch (error: any) {
-    // Gracefully handle quota errors for news specifically, as it's secondary content
-    const isQuota = 
-        error?.message?.includes('429') || 
-        error?.message?.includes('Quota') || 
-        error?.toString().includes('429') ||
-        error?.toString().includes('RESOURCE_EXHAUSTED') ||
-        (error?.error && error.error.code === 429) ||
-        (error?.error && error.error.status === 'RESOURCE_EXHAUSTED');
-    
+    const isQuota = error?.message?.includes('429') || error?.message?.includes('Quota') || (error?.error && error.error.code === 429);
     if (isQuota) {
         console.warn("Live news fetch skipped due to quota limits.");
         return [{
@@ -306,7 +292,6 @@ export const fetchLiveNews = async (query: string, exclude: string[] = []): Prom
             summary: "Please try again in a few moments."
         }];
     }
-      
     console.error("Error fetching live news:", error);
     return [];
   }
@@ -332,9 +317,8 @@ export const resolveLocationQuery = async (query: string): Promise<SearchResult 
       8. 'coordinates': Precise decimal lat/lng.
       9. 'notable': List 3 notable people associated with this place. For 'significance', provide a descriptive sentence (approx 100-120 chars).
       10. 'type': Choose ONE from: Continent, Country, State, City, Ocean, Point of Interest. Do not use random numbers.
-      11. CRITICAL: Do NOT include any conversational text, pleasantries, or markdown. Output ONLY valid JSON.
       
-      Output strictly valid JSON. Escape all double quotes.
+      Output strictly valid JSON.
     `;
 
     const mainRequest = generateContentWithRetry({
@@ -348,24 +332,18 @@ export const resolveLocationQuery = async (query: string): Promise<SearchResult 
     });
 
     const mainResponse = await mainRequest;
-    const mainText = mainResponse.text;
-    if (!mainText) return null;
-
-    const data = safeJsonParse(mainText);
+    const data = safeJsonParse(mainResponse.text);
     if (!data) return null;
 
-    // Validate coordinates exist
-    if (!data.coordinates || typeof data.coordinates.lat !== 'number' || typeof data.coordinates.lng !== 'number') {
+    if (!data.coordinates || typeof data.coordinates.lat !== 'number') {
         console.warn("Resolved location missing valid coordinates");
     }
-
-    // Default values if missing
-    if (!data.description) data.description = "Detailed description unavailable for this location.";
+    
+    // Fill defaults
+    if (!data.description) data.description = "Detailed description unavailable.";
     if (!data.funFacts) data.funFacts = [];
     if (!data.notable) data.notable = [];
     if (!data.type) data.type = LocationType.POI;
-
-    // Decoupled: Return data without news first for progressive loading
     data.news = [];
 
     return {
@@ -389,16 +367,15 @@ export const getInfoFromCoordinates = async (lat: number, lng: number): Promise<
       
       Return a JSON object with:
       - name: Common name of the location
-      - type: Continent, Country, State, City, Ocean, or Point of Interest. (Exact string, no numbers).
+      - type: Continent, Country, State, City, Ocean, or Point of Interest.
       - description: Detailed Wikipedia-style encyclopedia entry (approx 80 words).
       - population: Recent estimate (if applicable).
       - climate: Köppen climate classification.
       - funFacts: 3 interesting facts.
       - coordinates: The exact input coordinates {lat: ${lat}, lng: ${lng}}
-      - notable: 3 notable people. For 'significance', provide a descriptive sentence (approx 100-120 chars).
+      - notable: 3 notable people. For 'significance', provide a descriptive sentence.
       
-      CRITICAL: Strictly conform to JSON syntax. Do not hallucinate repeating strings of numbers.
-      Do NOT include any conversational text (e.g. "Here is the JSON"). Output ONLY the JSON object.
+      Output ONLY the JSON object.
     `;
 
     const mainRequest = generateContentWithRetry({
@@ -412,15 +389,9 @@ export const getInfoFromCoordinates = async (lat: number, lng: number): Promise<
     });
 
     const mainResponse = await mainRequest;
-    const mainText = mainResponse.text;
-    
-    let data = null;
-    if (mainText) {
-      data = safeJsonParse(mainText);
-    }
+    let data = safeJsonParse(mainResponse.text);
 
     if (!data) {
-        // Fallback structure if parsing failed completely
         data = {
             name: "Unknown Location",
             type: "Point of Interest",
@@ -432,40 +403,26 @@ export const getInfoFromCoordinates = async (lat: number, lng: number): Promise<
         };
     }
 
-    // CRITICAL FIX: Ensure coordinates are present even if model hallucinated or omitted them
     if (!data.coordinates || typeof data.coordinates.lat !== 'number') {
         data.coordinates = { lat, lng };
     }
     
-    // Ensure text fields are populated
-    if (!data.description) data.description = "Detailed description unavailable for this location.";
+    if (!data.description) data.description = "Detailed description unavailable.";
     if (!data.funFacts) data.funFacts = [];
     if (!data.notable) data.notable = [];
     if (!data.type) data.type = LocationType.POI;
-
-    // Decoupled: Return data without news first for progressive loading
     data.news = [];
 
     return data;
 
   } catch (error: any) {
-    console.error("Error getting info:", error);
-    
-    // Enhance error feedback for quota issues if retries failed
-    const isQuota = 
-        error?.message?.includes('429') || 
-        error?.message?.includes('Quota') || 
-        error?.toString().includes('429') ||
-        error?.toString().includes('RESOURCE_EXHAUSTED') ||
-        (error?.error && error.error.code === 429) ||
-        (error?.error && error.error.status === 'RESOURCE_EXHAUSTED');
+    const isQuota = error?.message?.includes('429') || error?.message?.includes('Quota') || (error?.error && error.error.code === 429);
 
-    // Return a safe fallback object to prevent UI crashes
     return {
         name: isQuota ? "System Busy (Quota)" : "Connection Error",
         type: "Point of Interest" as LocationType,
         description: isQuota 
-            ? "The knowledge engine is currently experiencing high request volume (Quota Exceeded). Please wait a few moments and try scanning another location." 
+            ? "The knowledge engine is currently experiencing high request volume. Please wait a few moments and try again." 
             : "Could not retrieve information at this time.",
         coordinates: { lat, lng },
         funFacts: [],
@@ -479,22 +436,8 @@ export const getNearbyPlaces = async (lat: number, lng: number): Promise<MapMark
   try {
     const prompt = `
       I am looking at a globe at coordinates ${lat}, ${lng}.
-      Identify 5-8 major cities, landmarks, or significant places within a 500km radius of this point.
-      
-      Important:
-      - If the area is remote (e.g. desert, ocean, tundra), return the single nearest geographic feature or settlement, or the region name itself as a result.
-      - Ensure at least one result is returned if possible.
-
-      Return a strict JSON array of objects with this schema:
-      {
-        "id": "unique-string",
-        "name": "Place Name",
-        "lat": number,
-        "lng": number,
-        "populationClass": "large" | "medium" | "small"
-      }
-
-      CRITICAL: Do not wrap in markdown. No extra whitespace. Just the raw JSON array.
+      Identify 5-8 major cities, landmarks, or significant places within a 500km radius.
+      Return a strict JSON array: [{"id": "uuid", "name": "Name", "lat": 0.0, "lng": 0.0, "populationClass": "medium"}]
     `;
 
     const response = await generateContentWithRetry({
@@ -502,31 +445,16 @@ export const getNearbyPlaces = async (lat: number, lng: number): Promise<MapMark
       contents: prompt,
       config: {
         responseMimeType: "application/json",
-        maxOutputTokens: 4000,
+        maxOutputTokens: 2000,
       }
     });
 
-    const text = response.text;
-    if (!text) return [];
-
-    const data = safeJsonParse(text);
-    if (Array.isArray(data)) {
-      return data;
-    }
-    // Handle case where AI wraps array in an object key
+    const data = safeJsonParse(response.text);
+    if (Array.isArray(data)) return data;
     if (data && data.places && Array.isArray(data.places)) return data.places;
-    if (data && data.markers && Array.isArray(data.markers)) return data.markers;
-
     return [];
 
   } catch (error: any) {
-    // Quota errors are expected for secondary calls, suppress robustly
-    const isQuota = error?.message?.includes('429') || error?.message?.includes('Quota') || (error?.error && error.error.code === 429);
-    if (isQuota) {
-        console.warn("Skipping nearby places fetch due to quota.");
-        return [];
-    }
-    console.error("Error fetching nearby places:", error);
     return [];
   }
 };
@@ -534,3 +462,51 @@ export const getNearbyPlaces = async (lat: number, lng: number): Promise<MapMark
 export const getMoreNews = async (locationName: string, existingHeadlines: string[]): Promise<NewsItem[]> => {
     return fetchLiveNews(locationName, existingHeadlines);
 }
+
+export const generateRoute = async (text: string): Promise<Waypoint[]> => {
+  try {
+    const isUrl = text.startsWith('http');
+    
+    const prompt = `
+      Task: Trace a geographical route from the text.
+      ${isUrl ? `URL: "${text}". Trace locations mentioned in the page content.` : `Text: "${text}"`}
+
+      Instructions:
+      1. Extract every significant physical location (City, Country, Landmark) in narrative order.
+      2. If vague, use nearest major city.
+      3. Schema: {"name": "Location Name", "lat": 0.0, "lng": 0.0, "context": "Very brief reason (max 10 words)"}
+      4. Remove consecutive duplicates.
+      5. Output a strict JSON Array.
+    `;
+    
+    const tools = isUrl ? [{ googleSearch: {} }] : undefined;
+
+    const response = await generateContentWithRetry({
+      model: modelName,
+      contents: prompt,
+      config: {
+        tools: tools,
+        maxOutputTokens: 8192,
+      }
+    });
+    
+    const data = safeJsonParse(response.text);
+    
+    let items: any[] = [];
+    if (Array.isArray(data)) items = data;
+    else if (data && data.route && Array.isArray(data.route)) items = data.route;
+    else if (data && data.locations && Array.isArray(data.locations)) items = data.locations;
+
+    return items.map((item, i) => ({
+      id: `wp-${i}-${Date.now()}`,
+      name: item.name || "Unknown Waypoint",
+      lat: item.lat || 0,
+      lng: item.lng || 0,
+      context: item.context || ""
+    })).filter(w => w.lat !== 0 || w.lng !== 0);
+
+  } catch (error) {
+    console.error("Error generating route:", error);
+    return [];
+  }
+};
