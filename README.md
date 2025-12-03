@@ -2,7 +2,7 @@
 
 # TerraExplorer
 
-TerraExplorer is an immersive, interactive 3D Earth visualization application powered by Google's Gemini API. It allows users to explore the globe, discover detailed information about any location, and view real-time news updates, all wrapped in a customizable interface featuring modern and retro aesthetics.
+Terra Explorer is an interactive 3D globe application that lets users freely navigate the planet or quickly jump to cities, states, landmarks, and unique points of interest through a powerful search experience. It supports rich data layers including shipwrecks, natural wonders, and historical sites, provides overlays with location overviews, current news, and notable people associated with each place, and includes the Trace Route feature that extracts locations from any article, URL, or text block to build a connected journey across them.
 
 ## Features
 
