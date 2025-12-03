@@ -374,6 +374,12 @@ const App: React.FC = () => {
                 text: wp.context
             };
         }
+
+        // Add default note for specific Genghis Khan waypoint
+        if (wp.id === 'wp-genghis-1') {
+            data.defaultNote = "Waypoints from https://www.worldhistory.org/image/11221/map-of-the-campaigns-of-genghis-khan/";
+        }
+
         setLocationInfo(data);
         setIsLoading(false);
 

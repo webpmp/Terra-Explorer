@@ -42,6 +42,7 @@ export interface LocationInfo {
     title: string;
     text: string;
   };
+  defaultNote?: string;
 }
 
 export interface MapMarker {

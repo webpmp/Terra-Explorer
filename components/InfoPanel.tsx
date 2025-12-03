@@ -219,6 +219,17 @@ const InfoPanel: React.FC<InfoPanelProps> = ({
                 setNotes([]);
                 setIsNotesExpanded(false);
             }
+        } else if (info.defaultNote) {
+            // Initialize with default note
+            const defNote: Note = {
+                id: `default-${Date.now()}`,
+                text: info.defaultNote,
+                timestamp: Date.now()
+            };
+            const initialNotes = [defNote];
+            setNotes(initialNotes);
+            setIsNotesExpanded(true);
+            localStorage.setItem(locationKey, JSON.stringify(initialNotes));
         } else {
             setNotes([]);
             setIsNotesExpanded(false);
@@ -406,6 +417,28 @@ const InfoPanel: React.FC<InfoPanelProps> = ({
   const smallTextSize = isRetro ? 'text-sm' : 'text-xs';
   const tabTextSize = isRetro ? 'text-xl' : 'text-xs';
   const tabIconSize = isRetro ? 18 : 14;
+
+  const renderNoteText = (text: string) => {
+    // Detect URLs starting with http:// or https://
+    const parts = text.split(/(https?:\/\/[^\s]+)/g);
+    return parts.map((part, i) => {
+      if (part.match(/^https?:\/\//)) {
+        return (
+          <a 
+            key={i} 
+            href={part} 
+            target="_blank" 
+            rel="noopener noreferrer" 
+            className={`underline decoration-1 underline-offset-2 break-all ${isRetro ? 'hover:text-current font-bold' : 'text-cyan-400 hover:text-cyan-300'}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {part}
+          </a>
+        );
+      }
+      return part;
+    });
+  };
 
   if (expandedImage && wikiImage) {
       return (
@@ -778,7 +811,9 @@ const InfoPanel: React.FC<InfoPanelProps> = ({
                                          </div>
                                      ) : (
                                         <>
-                                            <p className={`${bodySize} ${theme.bodyText} pr-6 break-words`}>{note.text}</p>
+                                            <p className={`${bodySize} ${theme.bodyText} pr-6 break-words whitespace-pre-wrap`}>
+                                                {renderNoteText(note.text)}
+                                            </p>
                                             <p className={`text-[10px] mt-1 opacity-50 ${theme.subtext}`}>
                                                 {new Date(note.timestamp).toLocaleDateString()}
                                             </p>

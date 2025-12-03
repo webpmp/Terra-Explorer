@@ -196,10 +196,10 @@ const UniversalMarker: React.FC<{
          <Billboard follow={true}>
             <Text
               fontSize={size * 1.6}
-              color="white"
+              color={isRetro ? "black" : "white"}
               anchorX="center"
               anchorY="middle"
-              outlineWidth="5%"
+              outlineWidth={isRetro ? 0 : "5%"}
               outlineColor="black"
               fontWeight="bold"
               position={[0, 0, 0]}
@@ -279,7 +279,7 @@ const RotatingEarth = forwardRef<THREE.Mesh, EarthProps>((props, ref) => {
   // Marker Colors
   const markerColor = isModern ? '#ff3333' : isGreen ? '#a3e635' : '#fcd34d';
   const favoriteColor = isModern ? '#d946ef' : '#ffffff'; 
-  const waypointColor = isModern ? '#00e5ff' : '#00e5ff'; // Cyan for route waypoints
+  const waypointColor = isModern ? '#00e5ff' : isGreen ? '#4ade80' : '#fbbf24'; 
   
   // Marker Outline Colors
   const outlineColor = isModern ? '#ffffff' : isGreen ? '#4ade80' : '#fbbf24';
